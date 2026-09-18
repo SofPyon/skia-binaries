@@ -268,6 +268,7 @@ else
 fi
 cat >"${TMP_EXTRACT_DIR}/smoke.c" <<'SMOKE'
 #include "include/c/sk_canvas.h"
+#include "include/c/sk_paint.h"
 #include "include/c/sk_path.h"
 #include "include/c/sk_surface.h"
 #include "include/c/sk_document.h"
