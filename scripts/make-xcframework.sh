@@ -14,10 +14,12 @@ HEADERS_DIR="${DIST_DIR}/headers"
 SLICES=(iphoneos-arm64 iphonesimulator-arm64 xros-arm64 xrsimulator-arm64 macosx-arm64)
 
 rm -rf "${DIST_DIR}/libSkiaSharp.xcframework" "${DIST_DIR}/libHarfBuzzSharp.xcframework" "${HEADERS_DIR}"
-mkdir -p "${DIST_DIR}" "${HEADERS_DIR}/CSkia" "${HEADERS_DIR}/CHarfBuzz"
+mkdir -p "${DIST_DIR}" "${HEADERS_DIR}/CSkia/include/c" "${HEADERS_DIR}/CHarfBuzz"
 
 echo "== Assembling headers =="
-cp "${SKIA_DIR}"/include/c/*.h "${HEADERS_DIR}/CSkia/"
+# The C API headers include each other as "include/c/sk_types.h", relative to the Skia root,
+# so they keep that directory layout under Headers and the umbrella header sits at the root.
+cp "${SKIA_DIR}"/include/c/*.h "${HEADERS_DIR}/CSkia/include/c/"
 cp "${ROOT_DIR}/modulemap/CSkia/module.modulemap" "${HEADERS_DIR}/CSkia/"
 cp "${ROOT_DIR}/modulemap/CSkia/CSkia.h" "${HEADERS_DIR}/CSkia/"
 
@@ -38,7 +40,7 @@ for NAME in SkiaSharp HarfBuzzSharp; do
 
   CREATE_ARGS=()
   for SLICE in "${SLICES[@]}"; do
-    LIB_PATH="${SKIA_DIR}/out/${SLICE}/lib${NAME}.a"
+    LIB_PATH="${SKIA_DIR}/out/${SLICE}/merged/lib${NAME}.a"
     if [ ! -f "${LIB_PATH}" ]; then
       echo "ERROR: ${LIB_PATH} not found - run scripts/build-slice.sh ${SLICE} first" >&2
       exit 1
