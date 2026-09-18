@@ -1,0 +1,5 @@
+module CHarfBuzz {
+  umbrella header "CHarfBuzz.h"
+  export *
+  link "HarfBuzzSharp"
+}

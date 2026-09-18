@@ -1,0 +1,8 @@
+MONO_SKIA_REPO=https://github.com/mono/skia.git
+MONO_SKIA_COMMIT=8f5cc7a4c200ba8ecc5bc6263cf9f8bfe0ba6e6b   # SkiaSharp v4.152.0 pin, Skia milestone 152
+SKIA_MILESTONE=152
+RELEASE_TAG=skia-m152-1
+MIN_IOS=18.0
+MIN_MACOS=14.0
+MIN_VISIONOS=1.0
+HARFBUZZ_COMMIT=56feae4035bdd48f62ba2b8d8c16232d4d89b3a4   # resolved by DEPS at MONO_SKIA_COMMIT
