@@ -71,6 +71,17 @@ copy_license "piex" "${EXTERNALS_DIR}/piex"
 echo "== dng_sdk =="
 copy_license "dng_sdk" "${EXTERNALS_DIR}/dng_sdk"
 
+# FreeType is compiled in only for the Linux slices (the Apple slices rasterise glyphs through
+# Core Text). It is dual-licensed; the FTL is the one these binaries use.
+echo "== freetype (Linux slices only) =="
+FREETYPE_DIR="${EXTERNALS_DIR}/freetype"
+if [ -f "${FREETYPE_DIR}/LICENSE.TXT" ] && [ -f "${FREETYPE_DIR}/docs/FTL.TXT" ]; then
+  cp "${FREETYPE_DIR}/LICENSE.TXT" "${LICENSES_DIR}/freetype-LICENSE.TXT"
+  cp "${FREETYPE_DIR}/docs/FTL.TXT" "${LICENSES_DIR}/freetype-FTL.TXT"
+else
+  echo "WARNING: no license file found for freetype under ${FREETYPE_DIR}" >&2
+fi
+
 # skcms lives in the Skia tree (modules/skcms) under Skia's own LICENSE, so it needs no entry.
 
 echo "== Concatenating THIRD_PARTY_NOTICES.txt =="
