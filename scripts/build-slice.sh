@@ -80,28 +80,28 @@ EXTRA_ASMFLAGS=()
 case "${SLICE}" in
   iphoneos-arm64)
     SLICE_ARGS=(
-      "target_os='ios'"
-      "target_cpu='arm64'"
+      "target_os=\"ios\""
+      "target_cpu=\"arm64\""
       "ios_use_simulator=false"
-      "min_ios_version='${MIN_IOS}'"
+      "min_ios_version=\"${MIN_IOS}\""
     )
     ;;
   iphonesimulator-arm64)
     SLICE_ARGS=(
-      "target_os='ios'"
-      "target_cpu='arm64'"
+      "target_os=\"ios\""
+      "target_cpu=\"arm64\""
       "ios_use_simulator=true"
-      "min_ios_version='${MIN_IOS}'"
+      "min_ios_version=\"${MIN_IOS}\""
     )
     ;;
   xros-arm64)
     XROS_SDK="$(xcrun --sdk xros --show-sdk-path)"
     SLICE_ARGS=(
-      "target_os='ios'"
-      "target_cpu='arm64'"
+      "target_os=\"ios\""
+      "target_cpu=\"arm64\""
       "ios_use_simulator=false"
-      "min_ios_version='${MIN_IOS}'"
-      "xcode_sysroot='${XROS_SDK}'"
+      "min_ios_version=\"${MIN_IOS}\""
+      "xcode_sysroot=\"${XROS_SDK}\""
     )
     EXTRA_CFLAGS+=("-target" "arm64-apple-xros1.0")
     EXTRA_ASMFLAGS+=("-target" "arm64-apple-xros1.0")
@@ -109,20 +109,20 @@ case "${SLICE}" in
   xrsimulator-arm64)
     XRSIM_SDK="$(xcrun --sdk xrsimulator --show-sdk-path)"
     SLICE_ARGS=(
-      "target_os='ios'"
-      "target_cpu='arm64'"
+      "target_os=\"ios\""
+      "target_cpu=\"arm64\""
       "ios_use_simulator=true"
-      "min_ios_version='${MIN_IOS}'"
-      "xcode_sysroot='${XRSIM_SDK}'"
+      "min_ios_version=\"${MIN_IOS}\""
+      "xcode_sysroot=\"${XRSIM_SDK}\""
     )
     EXTRA_CFLAGS+=("-target" "arm64-apple-xros1.0-simulator")
     EXTRA_ASMFLAGS+=("-target" "arm64-apple-xros1.0-simulator")
     ;;
   macosx-arm64)
     SLICE_ARGS=(
-      "target_os='mac'"
-      "target_cpu='arm64'"
-      "min_macos_version='${MIN_MACOS}'"
+      "target_os=\"mac\""
+      "target_cpu=\"arm64\""
+      "min_macos_version=\"${MIN_MACOS}\""
     )
     EXTRA_CFLAGS+=("-stdlib=libc++")
     ;;
@@ -140,7 +140,7 @@ join_gn_list() {
     if [ "${first}" -eq 0 ]; then
       out+=","
     fi
-    out+="'${item}'"
+    out+="\"${item}\""
     first=0
   done
   out+="]"
@@ -175,14 +175,28 @@ echo "== ninja ${NINJA_TARGETS[*]} =="
   "${NINJA}" -C "${OUT_SUBDIR}" "${NINJA_TARGETS[@]}"
 )
 
+# gn's `complete_static_lib` does not fold the dependency archives into libSkiaSharp.a on
+# Apple toolchains (the archive only carries the C API shims and a few objects), so every
+# archive ninja produced except HarfBuzz is merged into one libSkiaSharp.a under merged/.
+# HarfBuzz stays separate; it is its own module.
+MERGED_DIR="${OUT_DIR}/merged"
+rm -rf "${MERGED_DIR}"
+mkdir -p "${MERGED_DIR}"
+SKIA_INPUTS=()
+for archive in "${OUT_DIR}"/*.a; do
+  case "$(basename "${archive}")" in
+    libHarfBuzzSharp.a) ;;
+    *) SKIA_INPUTS+=("${archive}") ;;
+  esac
+done
+echo "== Merging ${#SKIA_INPUTS[@]} archives into merged/libSkiaSharp.a =="
+libtool -static -no_warning_for_no_symbols -o "${MERGED_DIR}/libSkiaSharp.a" "${SKIA_INPUTS[@]}"
+cp "${OUT_DIR}/libHarfBuzzSharp.a" "${MERGED_DIR}/libHarfBuzzSharp.a"
+
 for LIB in libSkiaSharp.a libHarfBuzzSharp.a; do
-  LIB_PATH="${OUT_DIR}/${LIB}"
-  if [ ! -f "${LIB_PATH}" ]; then
-    echo "ERROR: expected output ${LIB_PATH} not found" >&2
-    exit 1
-  fi
+  LIB_PATH="${MERGED_DIR}/${LIB}"
   ARCHS="$(lipo -info "${LIB_PATH}" | sed -E 's/.*: //')"
-  if [ "${ARCHS}" = "arm64 arm64e" ] || [[ "${ARCHS}" == *"arm64e"* && "${ARCHS}" == *"arm64"* ]]; then
+  if [[ "${ARCHS}" == *"arm64e"* ]]; then
     echo "== Thinning ${LIB} (${ARCHS}) to arm64 =="
     lipo "${LIB_PATH}" -thin arm64 -output "${LIB_PATH}.thin"
     mv "${LIB_PATH}.thin" "${LIB_PATH}"
@@ -190,8 +204,8 @@ for LIB in libSkiaSharp.a libHarfBuzzSharp.a; do
 done
 
 echo "== Verifying symbols =="
-SKIA_LIB="${OUT_DIR}/libSkiaSharp.a"
-HB_LIB="${OUT_DIR}/libHarfBuzzSharp.a"
+SKIA_LIB="${MERGED_DIR}/libSkiaSharp.a"
+HB_LIB="${MERGED_DIR}/libHarfBuzzSharp.a"
 
 SKIA_SYMBOL_COUNT="$(nm -g "${SKIA_LIB}" | grep -c ' T _sk_canvas_draw_path\| T _sk_pathop_op\| T _sk_surface_new_metal_layer' || true)"
 if [ "${SKIA_SYMBOL_COUNT}" -lt 3 ]; then
@@ -205,26 +219,83 @@ if ! nm -g "${HB_LIB}" | grep -q ' T _hb_shape$'; then
 fi
 
 echo "== Verifying LC_BUILD_VERSION platform =="
+# otool -l prints the LC_BUILD_VERSION platform as a numeric code, not text:
+# PLATFORM_MACOS=1, PLATFORM_IOS=2, PLATFORM_IOSSIMULATOR=7,
+# PLATFORM_XROS=11, PLATFORM_XROS_SIMULATOR=12.
 case "${SLICE}" in
-  iphoneos-arm64) EXPECTED_PLATFORM="IOS" ;;
-  iphonesimulator-arm64) EXPECTED_PLATFORM="IOSSIMULATOR" ;;
-  xros-arm64) EXPECTED_PLATFORM="XROS" ;;
-  xrsimulator-arm64) EXPECTED_PLATFORM="XROS_SIMULATOR" ;;
-  macosx-arm64) EXPECTED_PLATFORM="MACOS" ;;
+  iphoneos-arm64) EXPECTED_PLATFORM_NAME="IOS"; EXPECTED_PLATFORM_CODE=2 ;;
+  iphonesimulator-arm64) EXPECTED_PLATFORM_NAME="IOSSIMULATOR"; EXPECTED_PLATFORM_CODE=7 ;;
+  xros-arm64) EXPECTED_PLATFORM_NAME="XROS"; EXPECTED_PLATFORM_CODE=11 ;;
+  xrsimulator-arm64) EXPECTED_PLATFORM_NAME="XROS_SIMULATOR"; EXPECTED_PLATFORM_CODE=12 ;;
+  macosx-arm64) EXPECTED_PLATFORM_NAME="MACOS"; EXPECTED_PLATFORM_CODE=1 ;;
 esac
 
 TMP_EXTRACT_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_EXTRACT_DIR}"' EXIT
-FIRST_OBJECT="$(ar -t "${SKIA_LIB}" | head -1)"
+# The member list is captured whole first: piping `ar -t` into `head -1` makes `ar` die of
+# SIGPIPE on a large archive, and with `pipefail` that silently aborts the script.
+ARCHIVE_MEMBERS="$(ar -t "${SKIA_LIB}")"
+FIRST_OBJECT="$(awk '!/^__\.SYMDEF/ { print; exit }' <<<"${ARCHIVE_MEMBERS}")"
 (
   cd "${TMP_EXTRACT_DIR}"
   ar -x "${SKIA_LIB}" "${FIRST_OBJECT}"
 )
 OTOOL_OUTPUT="$(otool -l "${TMP_EXTRACT_DIR}/${FIRST_OBJECT}")"
 echo "${OTOOL_OUTPUT}" | grep -A4 LC_BUILD_VERSION || true
-if ! echo "${OTOOL_OUTPUT}" | grep -A2 LC_BUILD_VERSION | grep -q "${EXPECTED_PLATFORM}"; then
-  echo "WARNING: expected LC_BUILD_VERSION platform ${EXPECTED_PLATFORM} not confirmed in ${FIRST_OBJECT}" >&2
+ACTUAL_PLATFORM_CODE="$(echo "${OTOOL_OUTPUT}" | grep -A3 LC_BUILD_VERSION | awk '/platform/ {print $2; exit}')"
+if [ "${ACTUAL_PLATFORM_CODE}" != "${EXPECTED_PLATFORM_CODE}" ]; then
+  echo "WARNING: expected LC_BUILD_VERSION platform ${EXPECTED_PLATFORM_NAME} (${EXPECTED_PLATFORM_CODE}), got '${ACTUAL_PLATFORM_CODE}' in ${FIRST_OBJECT}" >&2
+else
+  echo "LC_BUILD_VERSION platform confirmed: ${EXPECTED_PLATFORM_NAME} (${EXPECTED_PLATFORM_CODE})"
 fi
+
+echo "== Link smoke test =="
+# Linking a program that calls into both libraries proves the merged archive is complete:
+# any Skia object left out shows up here as an undefined symbol, which nm alone cannot tell.
+case "${SLICE}" in
+  iphoneos-arm64) LINK_TARGET="arm64-apple-ios${MIN_IOS}"; LINK_SDK=iphoneos; LINK_UI=1 ;;
+  iphonesimulator-arm64) LINK_TARGET="arm64-apple-ios${MIN_IOS}-simulator"; LINK_SDK=iphonesimulator; LINK_UI=1 ;;
+  xros-arm64) LINK_TARGET="arm64-apple-xros${MIN_VISIONOS}"; LINK_SDK=xros; LINK_UI=1 ;;
+  xrsimulator-arm64) LINK_TARGET="arm64-apple-xros${MIN_VISIONOS}-simulator"; LINK_SDK=xrsimulator; LINK_UI=1 ;;
+  macosx-arm64) LINK_TARGET="arm64-apple-macos${MIN_MACOS}"; LINK_SDK=macosx; LINK_UI=0 ;;
+esac
+LINK_FRAMEWORKS=(-framework Foundation -framework CoreFoundation -framework CoreGraphics
+  -framework CoreText -framework ImageIO -framework Metal)
+if [ "${LINK_UI}" = "1" ]; then
+  LINK_FRAMEWORKS+=(-framework UIKit -framework MobileCoreServices)
+else
+  LINK_FRAMEWORKS+=(-framework AppKit -framework ApplicationServices)
+fi
+cat >"${TMP_EXTRACT_DIR}/smoke.c" <<'SMOKE'
+#include "include/c/sk_canvas.h"
+#include "include/c/sk_path.h"
+#include "include/c/sk_surface.h"
+#include "include/c/sk_document.h"
+#include "include/c/sk_typeface.h"
+#include "hb.h"
+int main(void) {
+  sk_imageinfo_t info = {0, 4, 4, RGBA_8888_SK_COLORTYPE, PREMUL_SK_ALPHATYPE};
+  sk_surface_t* surface = sk_surface_new_raster(&info, 0, 0);
+  sk_canvas_t* canvas = sk_surface_get_canvas(surface);
+  sk_path_t* path = sk_path_new();
+  sk_paint_t* paint = sk_paint_new();
+  sk_canvas_draw_path(canvas, path, paint);
+  sk_pathop_op(path, path, UNION_SK_PATHOP, path);
+  sk_fontmgr_t* fontmgr = sk_fontmgr_create_default();
+  hb_buffer_t* buffer = hb_buffer_create();
+  hb_buffer_destroy(buffer);
+  (void)fontmgr;
+  sk_paint_delete(paint);
+  sk_path_delete(path);
+  sk_surface_unref(surface);
+  return 0;
+}
+SMOKE
+xcrun --sdk "${LINK_SDK}" clang -target "${LINK_TARGET}" \
+  -I "${SKIA_DIR}" -I "${SKIA_DIR}/third_party/externals/harfbuzz/src" \
+  "${TMP_EXTRACT_DIR}/smoke.c" "${SKIA_LIB}" "${HB_LIB}" -lc++ "${LINK_FRAMEWORKS[@]}" \
+  -o "${TMP_EXTRACT_DIR}/smoke"
+echo "link smoke test passed"
 
 echo "== Summary =="
 echo "Slice:        ${SLICE}"
