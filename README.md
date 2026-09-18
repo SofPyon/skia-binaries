@@ -48,11 +48,27 @@ scripts/release.sh
 
 ## Using the binaries
 
-Add the released xcframework zip as a Swift Package `binaryTarget`, or
-extract it directly into an Xcode project. `modulemap/CSkia` and
-`modulemap/CHarfBuzz` contain the module maps and umbrella headers used to
-expose the C API to Swift; `scripts/make-xcframework.sh` copies them
-alongside the vendored headers when assembling each xcframework.
+The xcframeworks carry static libraries and headers only. Header layout:
+
+- `libSkiaSharp.xcframework`: `Headers/include/c/*.h` (the headers include each other as
+  `"include/c/sk_types.h"`, so the prefix is part of the API)
+- `libHarfBuzzSharp.xcframework`: `Headers/harfbuzz/hb*.h`
+
+They deliberately ship no `module.modulemap`: SwiftPM copies every binary target's
+headers into one shared include directory, and two xcframeworks with a root module
+map collide there. Declare the modules in the consuming package instead, with a
+small C target per library whose `include/` holds the files from `modulemap/`:
+
+```swift
+.binaryTarget(name: "libSkiaSharp", url: "…/libSkiaSharp.xcframework.zip", checksum: "…"),
+.binaryTarget(name: "libHarfBuzzSharp", url: "…/libHarfBuzzSharp.xcframework.zip", checksum: "…"),
+.target(name: "CSkia", dependencies: ["libSkiaSharp"]),          // Sources/CSkia/include/{module.modulemap,CSkia.h} + an empty .c file
+.target(name: "CHarfBuzz", dependencies: ["libHarfBuzzSharp"]),  // Sources/CHarfBuzz/include/{module.modulemap,CHarfBuzz.h} + an empty .c file
+```
+
+Targets that use them link `c++` and the frameworks Skia's Apple ports need:
+Foundation, CoreFoundation, CoreGraphics, CoreText, ImageIO, Metal, plus UIKit and
+MobileCoreServices on iOS/visionOS or AppKit and ApplicationServices on macOS.
 
 ## License
 

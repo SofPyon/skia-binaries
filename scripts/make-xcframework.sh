@@ -17,16 +17,16 @@ rm -rf "${DIST_DIR}/libSkiaSharp.xcframework" "${DIST_DIR}/libHarfBuzzSharp.xcfr
 mkdir -p "${DIST_DIR}" "${HEADERS_DIR}/CSkia/include/c" "${HEADERS_DIR}/CHarfBuzz"
 
 echo "== Assembling headers =="
-# The C API headers include each other as "include/c/sk_types.h", relative to the Skia root,
-# so they keep that directory layout under Headers and the umbrella header sits at the root.
+# The xcframeworks carry headers only, each under its own subdirectory, and no module map.
+# SwiftPM copies every slice's Headers into one shared include directory, so two xcframeworks
+# that both ship a root module.modulemap collide there ("Multiple commands produce
+# module.modulemap"). Consumers declare the modules themselves; see modulemap/ and README.md.
+# The Skia C API headers include each other as "include/c/sk_types.h", so that layout is kept.
 cp "${SKIA_DIR}"/include/c/*.h "${HEADERS_DIR}/CSkia/include/c/"
-cp "${ROOT_DIR}/modulemap/CSkia/module.modulemap" "${HEADERS_DIR}/CSkia/"
-cp "${ROOT_DIR}/modulemap/CSkia/CSkia.h" "${HEADERS_DIR}/CSkia/"
 
 HARFBUZZ_SRC_DIR="${SKIA_DIR}/third_party/externals/harfbuzz/src"
-find "${HARFBUZZ_SRC_DIR}" -maxdepth 1 -name 'hb*.h' -exec cp {} "${HEADERS_DIR}/CHarfBuzz/" \;
-cp "${ROOT_DIR}/modulemap/CHarfBuzz/module.modulemap" "${HEADERS_DIR}/CHarfBuzz/"
-cp "${ROOT_DIR}/modulemap/CHarfBuzz/CHarfBuzz.h" "${HEADERS_DIR}/CHarfBuzz/"
+mkdir -p "${HEADERS_DIR}/CHarfBuzz/harfbuzz"
+find "${HARFBUZZ_SRC_DIR}" -maxdepth 1 -name 'hb*.h' -exec cp {} "${HEADERS_DIR}/CHarfBuzz/harfbuzz/" \;
 
 for NAME in SkiaSharp HarfBuzzSharp; do
   if [ "${NAME}" = "SkiaSharp" ]; then

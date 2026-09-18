@@ -20,7 +20,8 @@ copy_license() {
   local dir="$2"
   local found=0
   if [ -d "${dir}" ]; then
-    for candidate in LICENSE LICENSE.txt LICENSE.md COPYING COPYING.txt NOTICE; do
+    for candidate in LICENSE LICENSE.txt LICENSE.md LICENSE.source_code LICENSE.technology \
+      COPYING COPYING.txt NOTICE; do
       if [ -f "${dir}/${candidate}" ]; then
         cp "${dir}/${candidate}" "${LICENSES_DIR}/${name}-${candidate}"
         found=1
@@ -66,6 +67,11 @@ copy_license "wuffs" "${EXTERNALS_DIR}/wuffs"
 
 echo "== piex =="
 copy_license "piex" "${EXTERNALS_DIR}/piex"
+
+echo "== dng_sdk =="
+copy_license "dng_sdk" "${EXTERNALS_DIR}/dng_sdk"
+
+# skcms lives in the Skia tree (modules/skcms) under Skia's own LICENSE, so it needs no entry.
 
 echo "== Concatenating THIRD_PARTY_NOTICES.txt =="
 NOTICES_FILE="${DIST_DIR}/THIRD_PARTY_NOTICES.txt"
