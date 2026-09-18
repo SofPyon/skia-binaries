@@ -427,7 +427,7 @@ if [ "${HOST_OS}" = "Linux" ]; then
   # The same flags consumers get from the bundled pkg-config files (see make-linux-bundle.sh).
   clang -I "${SKIA_DIR}" -I "${SKIA_DIR}/third_party/externals/harfbuzz/src" \
     "${TMP_EXTRACT_DIR}/smoke.c" "${SKIA_LIB}" "${HB_LIB}" \
-    -lfontconfig -lstdc++ -lm -lpthread -ldl \
+    -l:libfontconfig.so.1 -lstdc++ -lm -lpthread -ldl \
     -o "${TMP_EXTRACT_DIR}/smoke"
   # The container's CPU matches the slice, so the program can also run: it exercises the
   # raster surface and the fontconfig font manager at startup.

@@ -49,7 +49,9 @@ for SLICE in "${SLICES[@]}"; do
   # `${pcfiledir}` makes the files valid wherever the tarball is unpacked. The link flags are
   # the ones the link smoke test in build-slice.sh uses: Skia is C++ (libstdc++ on this
   # toolchain) and its default font manager on Linux is fontconfig, which stays a system
-  # library so the archive carries no copy of it.
+  # library so the archive carries no copy of it. The runtime soname is named directly
+  # (`-l:libfontconfig.so.1`) because images such as swift:*-noble ship libfontconfig1 but not
+  # the -dev package that provides the plain libfontconfig.so link.
   cat > "${STAGE_DIR}/lib/pkgconfig/SkiaSharp.pc" <<PC
 prefix=\${pcfiledir}/../..
 libdir=\${prefix}/lib
@@ -59,7 +61,7 @@ Name: SkiaSharp
 Description: Skia with the SkiaSharp C API, static archive (mono/skia milestone ${SKIA_MILESTONE})
 Version: ${SKIA_MILESTONE}
 Cflags: -I\${includedir}/SkiaSharp
-Libs: -L\${libdir} -lSkiaSharp -lfontconfig -lstdc++ -lm -lpthread -ldl
+Libs: -L\${libdir} -lSkiaSharp -l:libfontconfig.so.1 -lstdc++ -lm -lpthread -ldl
 PC
   cat > "${STAGE_DIR}/lib/pkgconfig/HarfBuzzSharp.pc" <<PC
 prefix=\${pcfiledir}/../..

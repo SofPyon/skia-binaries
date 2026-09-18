@@ -92,7 +92,7 @@ libraries instead, reusing the same module map files:
 .systemLibrary(name: "CHarfBuzz", path: "Sources/CHarfBuzz/include", pkgConfig: "HarfBuzzSharp"),
 ```
 
-The `.pc` files carry the include path and link line (`-lSkiaSharp -lfontconfig -lstdc++ …`).
+The `.pc` files carry the include path and link line (`-lSkiaSharp -l:libfontconfig.so.1 -lstdc++ …`; the fontconfig soname is named directly so the consuming image needs only `libfontconfig1`, not the -dev package).
 The archives are raster-only (no GL, Vulkan, Metal or Graphite) and use fontconfig as the
 default font manager, so the consuming image needs `libfontconfig1` and some fonts
 installed; the `swift:*-noble` images ship both. FreeType is compiled in.
