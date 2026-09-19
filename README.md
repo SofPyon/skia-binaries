@@ -1,10 +1,10 @@
 # skia-binaries
 
-Prebuilt Skia (SkiaSharp C API) static xcframeworks for Apple platforms
-(iOS, iOS Simulator, visionOS, visionOS Simulator, macOS — arm64 only).
+Prebuilt Skia (SkiaSharp C API) static libraries: xcframeworks for Apple
+platforms (iOS, iOS Simulator, visionOS, visionOS Simulator, macOS, Mac Catalyst)
+and pkg-config tarballs for Linux (arm64, x86_64).
 
-Binaries are published as zipped `.xcframework` assets on the
-[Releases](../../releases) page, built from the
+Binaries are published on the [Releases](../../releases) page, built from the
 [mono/skia](https://github.com/mono/skia) SkiaSharp fork pinned in
 `skia.lock`.
 
@@ -12,7 +12,9 @@ Binaries are published as zipped `.xcframework` assets on the
 
 - `libSkiaSharp.xcframework` — Skia + the SkiaSharp C API (`sk_*` symbols)
 - `libHarfBuzzSharp.xcframework` — HarfBuzz + the HarfBuzzSharp C API (`hb_*` symbols)
-- `CHECKSUMS.txt` — `swift package compute-checksum` output for each zip, for use in a Swift Package `binaryTarget`
+- `skiasharp-linux-arm64.tar.gz` / `skiasharp-linux-x64.tar.gz` — both static archives, the
+  same headers, and `lib/pkgconfig/{SkiaSharp,HarfBuzzSharp}.pc` for Linux
+- `CHECKSUMS.txt` — `swift package compute-checksum` output for each zip, for use in a Swift Package `binaryTarget`, and the SHA-256 of each tarball
 - `THIRD_PARTY_NOTICES.txt` / `LICENSES.zip` — license texts for Skia and its bundled third-party dependencies
 
 ## Build scripts
@@ -24,24 +26,32 @@ to their own location.
 | Script | Purpose |
 | --- | --- |
 | `scripts/fetch.sh` | Clone the pinned Skia commit into `work/skia` and sync its dependencies (gn, ninja, third_party). |
-| `scripts/build-slice.sh <slice>` | Build `libSkiaSharp.a` and `libHarfBuzzSharp.a` for one slice with `gn`/`ninja`. |
-| `scripts/make-xcframework.sh` | Assemble per-slice static libraries and headers into xcframeworks, then zip them. |
+| `scripts/build-slice.sh <slice>` | Build `libSkiaSharp.a` and `libHarfBuzzSharp.a` for one slice with `gn`/`ninja`. A Linux slice run on macOS goes through `scripts/docker-build-linux.sh`. |
+| `scripts/docker-build-linux.sh <slice>` | Run `build-slice.sh` for a Linux slice inside the container from `docker/Dockerfile` (based on `swift:6.2-noble`, so the archives match the toolchain consumers build with). |
+| `scripts/make-xcframework.sh` | Assemble the Apple slices (lipo'd into one fat library per platform) and headers into xcframeworks, then zip them. Rewrites `CHECKSUMS.txt`. |
+| `scripts/make-linux-bundle.sh` | Package the Linux slices as pkg-config tarballs. Appends to `CHECKSUMS.txt`, so run it after `make-xcframework.sh`. |
 | `scripts/collect-licenses.sh` | Gather license texts of Skia and its third-party dependencies. |
 | `scripts/release.sh` | Publish the built zips and checksums as a GitHub release. |
 
-Supported slices: `iphoneos-arm64`, `iphonesimulator-arm64`, `xros-arm64`,
-`xrsimulator-arm64`, `macosx-arm64`.
+Supported slices: `iphoneos-arm64`, `iphonesimulator-arm64`, `iphonesimulator-x86_64`,
+`xros-arm64`, `xrsimulator-arm64`, `macosx-arm64`, `macosx-x86_64`, `maccatalyst-arm64`,
+`maccatalyst-x86_64`, `linux-arm64`, `linux-x64`.
+
+The Linux slices build in Docker (`docker/Dockerfile`). `linux-x64` on an Apple Silicon host
+runs under Docker Desktop's x86_64 emulation and takes several times longer than the
+native slice.
 
 ### Typical flow
 
 ```sh
 scripts/fetch.sh
-scripts/build-slice.sh iphoneos-arm64
-scripts/build-slice.sh iphonesimulator-arm64
-scripts/build-slice.sh xros-arm64
-scripts/build-slice.sh xrsimulator-arm64
-scripts/build-slice.sh macosx-arm64
+for slice in iphoneos-arm64 iphonesimulator-arm64 iphonesimulator-x86_64 \
+    xros-arm64 xrsimulator-arm64 macosx-arm64 macosx-x86_64 \
+    maccatalyst-arm64 maccatalyst-x86_64 linux-arm64 linux-x64; do
+  scripts/build-slice.sh "$slice"
+done
 scripts/make-xcframework.sh
+scripts/make-linux-bundle.sh
 scripts/collect-licenses.sh
 scripts/release.sh
 ```
@@ -68,7 +78,24 @@ small C target per library whose `include/` holds the files from `modulemap/`:
 
 Targets that use them link `c++` and the frameworks Skia's Apple ports need:
 Foundation, CoreFoundation, CoreGraphics, CoreText, ImageIO, Metal, plus UIKit and
-MobileCoreServices on iOS/visionOS or AppKit and ApplicationServices on macOS.
+MobileCoreServices on iOS/visionOS, AppKit and ApplicationServices on macOS, or UIKit on
+Mac Catalyst.
+
+### Linux
+
+SwiftPM has no binary targets on Linux. Unpack `skiasharp-linux-<arch>.tar.gz` anywhere,
+add its `lib/pkgconfig` to `PKG_CONFIG_PATH`, and declare the two modules as system
+libraries instead, reusing the same module map files:
+
+```swift
+.systemLibrary(name: "CSkia", path: "Sources/CSkia/include", pkgConfig: "SkiaSharp"),
+.systemLibrary(name: "CHarfBuzz", path: "Sources/CHarfBuzz/include", pkgConfig: "HarfBuzzSharp"),
+```
+
+The `.pc` files carry the include path and link line (`-lSkiaSharp -l:libfontconfig.so.1 -lstdc++ …`; the fontconfig soname is named directly so the consuming image needs only `libfontconfig1`, not the -dev package).
+The archives are raster-only (no GL, Vulkan, Metal or Graphite) and use fontconfig as the
+default font manager, so the consuming image needs `libfontconfig1` and some fonts
+installed; the `swift:*-noble` images ship both. FreeType is compiled in.
 
 ## License
 

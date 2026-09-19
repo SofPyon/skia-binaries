@@ -11,9 +11,19 @@ SKIA_DIR="${WORK_DIR}/skia"
 DIST_DIR="${ROOT_DIR}/dist"
 HEADERS_DIR="${DIST_DIR}/headers"
 
-SLICES=(iphoneos-arm64 iphonesimulator-arm64 xros-arm64 xrsimulator-arm64 macosx-arm64)
+# One xcframework library per platform. Where a platform has two architectures the archives
+# are lipo'd into a fat library first, because an xcframework holds one library per platform.
+LIBRARIES=(
+  "iphoneos:iphoneos-arm64"
+  "iphonesimulator:iphonesimulator-arm64 iphonesimulator-x86_64"
+  "xros:xros-arm64"
+  "xrsimulator:xrsimulator-arm64"
+  "macosx:macosx-arm64 macosx-x86_64"
+  "maccatalyst:maccatalyst-arm64 maccatalyst-x86_64"
+)
+FAT_DIR="${SKIA_DIR}/out/fat"
 
-rm -rf "${DIST_DIR}/libSkiaSharp.xcframework" "${DIST_DIR}/libHarfBuzzSharp.xcframework" "${HEADERS_DIR}"
+rm -rf "${DIST_DIR}/libSkiaSharp.xcframework" "${DIST_DIR}/libHarfBuzzSharp.xcframework" "${HEADERS_DIR}" "${FAT_DIR}"
 mkdir -p "${DIST_DIR}" "${HEADERS_DIR}/CSkia/include/c" "${HEADERS_DIR}/CHarfBuzz"
 
 echo "== Assembling headers =="
@@ -39,11 +49,25 @@ for NAME in SkiaSharp HarfBuzzSharp; do
   echo "== Creating lib${NAME}.xcframework =="
 
   CREATE_ARGS=()
-  for SLICE in "${SLICES[@]}"; do
-    LIB_PATH="${SKIA_DIR}/out/${SLICE}/merged/lib${NAME}.a"
-    if [ ! -f "${LIB_PATH}" ]; then
-      echo "ERROR: ${LIB_PATH} not found - run scripts/build-slice.sh ${SLICE} first" >&2
-      exit 1
+  for ENTRY in "${LIBRARIES[@]}"; do
+    LIBRARY="${ENTRY%%:*}"
+    read -r -a SLICES <<<"${ENTRY#*:}"
+    INPUTS=()
+    for SLICE in "${SLICES[@]}"; do
+      LIB_PATH="${SKIA_DIR}/out/${SLICE}/merged/lib${NAME}.a"
+      if [ ! -f "${LIB_PATH}" ]; then
+        echo "ERROR: ${LIB_PATH} not found - run scripts/build-slice.sh ${SLICE} first" >&2
+        exit 1
+      fi
+      INPUTS+=("${LIB_PATH}")
+    done
+    if [ "${#INPUTS[@]}" -eq 1 ]; then
+      LIB_PATH="${INPUTS[0]}"
+    else
+      LIB_PATH="${FAT_DIR}/${LIBRARY}/lib${NAME}.a"
+      mkdir -p "$(dirname "${LIB_PATH}")"
+      echo "== lipo ${LIBRARY}/lib${NAME}.a <- ${SLICES[*]} =="
+      lipo -create "${INPUTS[@]}" -output "${LIB_PATH}"
     fi
     CREATE_ARGS+=("-library" "${LIB_PATH}" "-headers" "${HEADERS_PATH}")
   done
