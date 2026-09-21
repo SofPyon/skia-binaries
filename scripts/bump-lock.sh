@@ -18,6 +18,10 @@ usage: bump-lock.sh <branch|commit> [--milestone N] [--tag TAG]
   --milestone N    Skia milestone number. Required for a raw commit, or for a
                     branch name that doesn't parse as release/X.Y.Z (its
                     milestone can't be derived from the name alone).
+  --branch NAME    The branch the commit belongs to. Required for a raw commit:
+                    MONO_SKIA_BRANCH is what scripts/check-upstream.sh measures
+                    drift against, so leaving the previous branch in place would
+                    make every later check report drift that cannot be resolved.
   --tag TAG        Override the derived RELEASE_TAG instead of computing one.
 
 Rewrites MONO_SKIA_COMMIT, MONO_SKIA_BRANCH, SKIA_MILESTONE and RELEASE_TAG in
@@ -28,6 +32,7 @@ USAGE
 
 REF=""
 MILESTONE_OVERRIDE=""
+BRANCH_OVERRIDE=""
 TAG_OVERRIDE=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -37,6 +42,14 @@ while [ "$#" -gt 0 ]; do
         exit 1
       }
       MILESTONE_OVERRIDE="$2"
+      shift 2
+      ;;
+    --branch)
+      [ "$#" -ge 2 ] || {
+        echo "ERROR: --branch requires a value" >&2
+        exit 1
+      }
+      BRANCH_OVERRIDE="$2"
       shift 2
       ;;
     --tag)
@@ -88,7 +101,15 @@ if [[ "${REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
     exit 1
   fi
   NEW_MILESTONE="${MILESTONE_OVERRIDE}"
-  BRANCH_NOTE="a raw commit was given; MONO_SKIA_BRANCH is left as '${MONO_SKIA_BRANCH}' - verify it by hand"
+  if [ -z "${BRANCH_OVERRIDE}" ]; then
+    echo "ERROR: --branch is required when passing a raw commit" >&2
+    echo "       MONO_SKIA_BRANCH is the ref scripts/check-upstream.sh measures drift against;" >&2
+    echo "       keeping the previous branch alongside an unrelated commit makes every later" >&2
+    echo "       check report drift that no bump can clear." >&2
+    exit 1
+  fi
+  NEW_BRANCH="${BRANCH_OVERRIDE}"
+  BRANCH_NOTE="a raw commit was given; MONO_SKIA_BRANCH was set from --branch - confirm the commit is on it"
 else
   echo "== Resolving ${REF} on ${MONO_SKIA_REPO} ==" >&2
   RESOLVED_LINE="$(git ls-remote --heads "${MONO_SKIA_REPO}" "${REF}")"
@@ -97,7 +118,7 @@ else
     exit 1
   fi
   NEW_COMMIT="$(printf '%s\n' "${RESOLVED_LINE}" | head -1 | awk '{print $1}')"
-  NEW_BRANCH="${REF}"
+  NEW_BRANCH="${BRANCH_OVERRIDE:-${REF}}"
   if [ -n "${MILESTONE_OVERRIDE}" ]; then
     NEW_MILESTONE="${MILESTONE_OVERRIDE}"
   elif [[ "${REF}" =~ ^release/[0-9]+\.([0-9]+)\.(x|[0-9]+)(-preview\.[0-9]+|-rc\.[0-9]+)?$ ]]; then
