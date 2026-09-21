@@ -236,10 +236,12 @@ verify_xcframework() {
   # This layout is intentional (see README.md): SwiftPM merges every binary target's headers
   # into one shared include directory, so a root module.modulemap here would collide with the
   # other xcframework's. Regressing this silently breaks consumers, hence the explicit check.
-  if find "${fw_dir}" -maxdepth 2 -name 'module.modulemap' | grep -q .; then
-    fail "${zip_name}: found a module.modulemap under a Headers root (must not ship one)"
+  # Unbounded depth on purpose: the headers sit at <lib_id>/Headers/, three levels down, so a
+  # depth limit would let the very file this check exists to catch pass unnoticed.
+  if find "${fw_dir}" -name 'module.modulemap' | grep -q .; then
+    fail "${zip_name}: found a module.modulemap inside the xcframework (must not ship one)"
   else
-    pass "${zip_name}: no module.modulemap under any Headers root"
+    pass "${zip_name}: no module.modulemap anywhere in the xcframework"
   fi
 
   if [ "${HAVE_PLUTIL}" -eq 1 ]; then
