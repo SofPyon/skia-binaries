@@ -47,13 +47,33 @@ for arg in "$@"; do
   esac
 done
 
-if [[ ! "${MONO_SKIA_BRANCH:-}" =~ ^release/([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-  echo "ERROR: MONO_SKIA_BRANCH ('${MONO_SKIA_BRANCH:-}') is not set or not of the form release/X.Y.Z" >&2
+if [ -z "${MONO_SKIA_BRANCH:-}" ]; then
+  echo "ERROR: MONO_SKIA_BRANCH is not set in skia.lock" >&2
   exit 1
 fi
-CUR_MAJOR="${BASH_REMATCH[1]}"
-CUR_MILESTONE="${BASH_REMATCH[2]}"
-CUR_PATCH="${BASH_REMATCH[3]}"
+# SKIA_MILESTONE, not the branch name, is the milestone of record: scripts/bump-lock.sh also
+# accepts maintenance (release/X.Y.x) and skia-sync branches, and deriving the milestone from
+# the name would make this check fail outright on a pin those produce.
+if [[ ! "${SKIA_MILESTONE:-}" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: SKIA_MILESTONE ('${SKIA_MILESTONE:-}') is not a number" >&2
+  exit 1
+fi
+CUR_MILESTONE="${SKIA_MILESTONE}"
+
+# The major and patch come from the branch name when it has them, and are only used to decide
+# which patch releases on this milestone count as newer. A branch that carries neither (a
+# floating .x line, a skia-sync ref) leaves the baseline unknown, which the report says outright
+# rather than guessing at.
+CUR_MAJOR=""
+CUR_PATCH=""
+if [[ "${MONO_SKIA_BRANCH}" =~ ^release/([0-9]+)\.[0-9]+\.([0-9]+)$ ]]; then
+  CUR_MAJOR="${BASH_REMATCH[1]}"
+  CUR_PATCH="${BASH_REMATCH[2]}"
+elif [[ "${MONO_SKIA_BRANCH}" =~ ^release/([0-9]+)\.[0-9]+\.x$ ]]; then
+  # A .x branch floats at the head of its line, so every numbered patch on it is fair game.
+  CUR_MAJOR="${BASH_REMATCH[1]}"
+  CUR_PATCH="-1"
+fi
 
 echo "== Fetching refs from ${MONO_SKIA_REPO} ==" >&2
 REMOTE_HEADS="$(git ls-remote --heads "${MONO_SKIA_REPO}")" || {
@@ -78,15 +98,17 @@ fi
 # --- same-milestone patches newer than the pinned one -----------------------
 # Numeric-only comparison (no sort -V) to avoid BSD/GNU sort differences.
 SAME_MILESTONE_PATCHES=()
-while IFS= read -r line; do
-  [ -n "${line}" ] || continue
-  SHA="$(awk '{print $1}' <<<"${line}")"
-  BRANCH="$(awk '{print $2}' <<<"${line}" | sed 's#^refs/heads/##')"
-  PATCH="${BRANCH##*.}"
-  if [ "${PATCH}" -gt "${CUR_PATCH}" ] 2>/dev/null; then
-    SAME_MILESTONE_PATCHES+=("${BRANCH}|${SHA}|${PATCH}")
-  fi
-done < <(printf '%s\n' "${REMOTE_HEADS}" | grep -E "	refs/heads/release/${CUR_MAJOR}\.${CUR_MILESTONE}\.[0-9]+\$" || true)
+if [ -n "${CUR_MAJOR}" ]; then
+  while IFS= read -r line; do
+    [ -n "${line}" ] || continue
+    SHA="$(awk '{print $1}' <<<"${line}")"
+    BRANCH="$(awk '{print $2}' <<<"${line}" | sed 's#^refs/heads/##')"
+    PATCH="${BRANCH##*.}"
+    if [ "${PATCH}" -gt "${CUR_PATCH}" ] 2>/dev/null; then
+      SAME_MILESTONE_PATCHES+=("${BRANCH}|${SHA}|${PATCH}")
+    fi
+  done < <(printf '%s\n' "${REMOTE_HEADS}" | grep -E "	refs/heads/release/${CUR_MAJOR}\.${CUR_MILESTONE}\.[0-9]+\$" || true)
+fi
 
 # --- newer milestones: stable vs. provisional -------------------------------
 NEW_MILESTONE_STABLE=()
@@ -95,13 +117,17 @@ while IFS= read -r line; do
   [ -n "${line}" ] || continue
   SHA="$(awk '{print $1}' <<<"${line}")"
   BRANCH="$(awk '{print $2}' <<<"${line}" | sed 's#^refs/heads/##')"
-  if [[ "${BRANCH}" =~ ^release/${CUR_MAJOR}\.([0-9]+)\.(x|[0-9]+)(-preview\.[0-9]+|-rc\.[0-9]+)?$ ]]; then
-    MILESTONE="${BASH_REMATCH[1]}"
-    PATCH="${BASH_REMATCH[2]}"
-    SUFFIX="${BASH_REMATCH[3]}"
+  # Every major line is scanned, not just the pinned one: mono/skia has moved 1.x -> 2.x ->
+  # 3.x -> 4.x, and filtering on the current major would make the next such jump invisible and
+  # report "up to date" forever.
+  if [[ "${BRANCH}" =~ ^release/([0-9]+)\.([0-9]+)\.(x|[0-9]+)(-preview\.[0-9]+|-rc\.[0-9]+)?$ ]]; then
+    MAJOR="${BASH_REMATCH[1]}"
+    MILESTONE="${BASH_REMATCH[2]}"
+    PATCH="${BASH_REMATCH[3]}"
+    SUFFIX="${BASH_REMATCH[4]}"
     if [ "${MILESTONE}" -gt "${CUR_MILESTONE}" ] 2>/dev/null; then
       if [ -z "${SUFFIX}" ] && [ "${PATCH}" != "x" ]; then
-        NEW_MILESTONE_STABLE+=("${BRANCH}|${SHA}|${MILESTONE}|${PATCH}")
+        NEW_MILESTONE_STABLE+=("${BRANCH}|${SHA}|${MILESTONE}|${MAJOR}|${PATCH}")
       else
         KIND="floating"
         case "${SUFFIX}" in
@@ -112,7 +138,7 @@ while IFS= read -r line; do
       fi
     fi
   fi
-done < <(printf '%s\n' "${REMOTE_HEADS}" | grep -E "	refs/heads/release/${CUR_MAJOR}\." || true)
+done < <(printf '%s\n' "${REMOTE_HEADS}" | grep -E "	refs/heads/release/" || true)
 
 # --- skia-sync/m<N> branches ahead of the pinned milestone, for reference ---
 SYNC_NEWER=()
@@ -131,26 +157,41 @@ done < <(printf '%s\n' "${REMOTE_HEADS}" | grep -E "	refs/heads/skia-sync/" || t
 # --- recommendation: the highest stable branch among the newer ones --------
 REC_BRANCH=""
 REC_SHA=""
-REC_MILESTONE=0
-REC_PATCH=0
+REC_MILESTONE=-1
+REC_MAJOR=-1
+REC_PATCH=-1
+# Ranked on milestone first, then major, then patch: the milestone is the Skia version these
+# binaries actually track, and a higher major of the same milestone is the same Skia with a
+# newer SkiaSharp wrapper.
 consider_stable() {
-  local branch="$1" sha="$2" milestone="$3" patch="$4"
-  if [ "${milestone}" -gt "${REC_MILESTONE}" ] || { [ "${milestone}" -eq "${REC_MILESTONE}" ] && [ "${patch}" -gt "${REC_PATCH}" ]; }; then
+  local branch="$1" sha="$2" milestone="$3" major="$4" patch="$5"
+  local better=0
+  if [ "${milestone}" -gt "${REC_MILESTONE}" ]; then
+    better=1
+  elif [ "${milestone}" -eq "${REC_MILESTONE}" ]; then
+    if [ "${major}" -gt "${REC_MAJOR}" ]; then
+      better=1
+    elif [ "${major}" -eq "${REC_MAJOR}" ] && [ "${patch}" -gt "${REC_PATCH}" ]; then
+      better=1
+    fi
+  fi
+  if [ "${better}" -eq 1 ]; then
     REC_BRANCH="${branch}"
     REC_SHA="${sha}"
     REC_MILESTONE="${milestone}"
+    REC_MAJOR="${major}"
     REC_PATCH="${patch}"
   fi
 }
 for entry in "${SAME_MILESTONE_PATCHES[@]:-}"; do
   [ -n "${entry}" ] || continue
   IFS='|' read -r branch sha patch <<<"${entry}"
-  consider_stable "${branch}" "${sha}" "${CUR_MILESTONE}" "${patch}"
+  consider_stable "${branch}" "${sha}" "${CUR_MILESTONE}" "${CUR_MAJOR}" "${patch}"
 done
 for entry in "${NEW_MILESTONE_STABLE[@]:-}"; do
   [ -n "${entry}" ] || continue
-  IFS='|' read -r branch sha milestone patch <<<"${entry}"
-  consider_stable "${branch}" "${sha}" "${milestone}" "${patch}"
+  IFS='|' read -r branch sha milestone major patch <<<"${entry}"
+  consider_stable "${branch}" "${sha}" "${milestone}" "${major}" "${patch}"
 done
 
 UPDATE_AVAILABLE=0
@@ -182,6 +223,32 @@ join_list() {
   fi
 }
 
+# Drift is an update in its own right, so it becomes the recommendation when no newer branch
+# outranks it; otherwise the report would tell the reader to do nothing right after telling them
+# the pinned ref has moved.
+recommendation_line() {
+  if [ -n "${REC_BRANCH}" ]; then
+    printf 'bump to %s (%s)' "${REC_BRANCH}" "${REC_SHA}"
+  elif [ "${BRANCH_MISSING}" -eq 1 ]; then
+    printf 'none - %s no longer exists upstream; pick a new branch by hand' "${MONO_SKIA_BRANCH}"
+  elif [ "${DRIFTED}" -eq 1 ]; then
+    printf 're-pin %s to its current tip (%s)' "${MONO_SKIA_BRANCH}" "${CURRENT_TIP}"
+  elif [ "${#NEW_MILESTONE_PROVISIONAL[@]}" -gt 0 ] || [ "${#SYNC_NEWER[@]}" -gt 0 ]; then
+    printf 'none - only provisional/sync branches are ahead, no stable release yet'
+  else
+    printf 'none - already on the newest stable branch'
+  fi
+}
+
+# The baseline for "newer patch on this milestone" only exists when the pinned branch names one.
+same_milestone_label() {
+  if [ -n "${CUR_MAJOR}" ]; then
+    printf 'Same-milestone patches newer than %s' "${MONO_SKIA_BRANCH}"
+  else
+    printf 'Same-milestone patches (baseline unknown: %s names no patch)' "${MONO_SKIA_BRANCH}"
+  fi
+}
+
 render_text() {
   echo "Current pin:   ${MONO_SKIA_BRANCH} @ ${MONO_SKIA_COMMIT} (milestone ${CUR_MILESTONE})"
   if [ "${BRANCH_MISSING}" -eq 1 ]; then
@@ -191,17 +258,11 @@ render_text() {
   else
     echo "Ref drift:     none"
   fi
-  echo "Same-milestone patches newer than ${MONO_SKIA_BRANCH}: $(join_list "${SAME_MILESTONE_PATCHES[@]:-}")"
+  echo "$(same_milestone_label): $(join_list "${SAME_MILESTONE_PATCHES[@]:-}")"
   echo "Newer milestones, stable:        $(join_list "${NEW_MILESTONE_STABLE[@]:-}")"
   echo "Newer milestones, provisional:   $(join_list "${NEW_MILESTONE_PROVISIONAL[@]:-}")"
   echo "skia-sync branches ahead (ref only): $(join_list "${SYNC_NEWER[@]:-}")"
-  if [ -n "${REC_BRANCH}" ]; then
-    echo "Recommendation: bump to ${REC_BRANCH} (${REC_SHA})"
-  elif [ "${#NEW_MILESTONE_PROVISIONAL[@]}" -gt 0 ] || [ "${#SYNC_NEWER[@]}" -gt 0 ]; then
-    echo "Recommendation: none - only provisional/sync branches are ahead, no stable release yet"
-  else
-    echo "Recommendation: none - already on the newest stable branch"
-  fi
+  echo "Recommendation: $(recommendation_line)"
 }
 
 json_array() {
@@ -254,17 +315,11 @@ render_markdown() {
   else
     echo "- **Ref drift:** none"
   fi
-  echo "- **Same-milestone patches newer than ${MONO_SKIA_BRANCH}:** $(join_list "${SAME_MILESTONE_PATCHES[@]:-}")"
+  echo "- **$(same_milestone_label):** $(join_list "${SAME_MILESTONE_PATCHES[@]:-}")"
   echo "- **New milestones, stable:** $(join_list "${NEW_MILESTONE_STABLE[@]:-}")"
   echo "- **New milestones, provisional:** $(join_list "${NEW_MILESTONE_PROVISIONAL[@]:-}")"
   echo "- **skia-sync branches ahead (reference only):** $(join_list "${SYNC_NEWER[@]:-}")"
-  if [ -n "${REC_BRANCH}" ]; then
-    echo "- **Recommendation:** bump to \`${REC_BRANCH}\` (\`${REC_SHA}\`)"
-  elif [ "${#NEW_MILESTONE_PROVISIONAL[@]}" -gt 0 ] || [ "${#SYNC_NEWER[@]}" -gt 0 ]; then
-    echo "- **Recommendation:** none yet - only provisional/sync branches are ahead"
-  else
-    echo "- **Recommendation:** none - already on the newest stable branch"
-  fi
+  echo "- **Recommendation:** $(recommendation_line)"
 }
 
 case "${FORMAT}" in
