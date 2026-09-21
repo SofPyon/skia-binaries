@@ -1,0 +1,29 @@
+name: Lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned rather than using the runner's preinstalled shellcheck: the two differ, and the
+      # same finding is reported under a different code by each (SC2317 vs SC2329), so an
+      # unpinned linter turns a green local run into a red CI run for no change of ours.
+      # README's Maintenance section names the identical command to run locally.
+      - name: shellcheck
+        run: docker run --rm -v "${PWD}:/mnt" koalaman/shellcheck:v0.11.0 scripts/*.sh
+
+      - name: actionlint
+        run: docker run --rm -v "${PWD}:/repo" -w /repo rhysd/actionlint:1.7.12 -color
+
+      - name: Validate skia.lock
+        run: scripts/check-lock.sh

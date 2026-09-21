@@ -3,11 +3,46 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-# shellcheck disable=SC1090
+# shellcheck disable=SC1090,SC1091  # skia.lock's path is resolved at runtime; shellcheck can't follow it statically
 source "${ROOT_DIR}/skia.lock"
+
+usage() {
+  cat <<'USAGE' >&2
+usage: release.sh [--draft]
+
+Publishes dist/'s built assets as a GitHub release tagged RELEASE_TAG (from
+skia.lock). Refuses to run if that tag already has a release, and if
+scripts/verify-release.sh finds anything wrong with dist/ first.
+
+  --draft         Create the release as a draft (same as RELEASE_DRAFT=1).
+USAGE
+}
+
+DRAFT="${RELEASE_DRAFT:-0}"
+for arg in "$@"; do
+  case "${arg}" in
+    --draft)
+      DRAFT=1
+      ;;
+    --help | -h)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "ERROR: unknown argument '${arg}'" >&2
+      usage
+      exit 1
+      ;;
+  esac
+done
 
 DIST_DIR="${ROOT_DIR}/dist"
 REPO="SofPyon/skia-binaries"
+
+if gh release view "${RELEASE_TAG}" --repo "${REPO}" >/dev/null 2>&1; then
+  echo "ERROR: a release already exists for tag ${RELEASE_TAG} - bump RELEASE_TAG in skia.lock (scripts/bump-lock.sh does this) before releasing again" >&2
+  exit 1
+fi
 
 REQUIRED_FILES=(
   "${DIST_DIR}/libSkiaSharp.xcframework.zip"
@@ -42,11 +77,21 @@ See CHECKSUMS.txt for Swift Package \`binaryTarget\` checksums and the tarballs'
 and THIRD_PARTY_NOTICES.txt for bundled third-party licenses.
 EOF
 
-echo "== Creating GitHub release ${RELEASE_TAG} =="
-gh release create "${RELEASE_TAG}" \
-  --repo "${REPO}" \
-  --title "${RELEASE_TAG}" \
-  --notes-file "${RELEASE_NOTES}" \
+echo "== Verifying dist/ before releasing =="
+"${SCRIPT_DIR}/verify-release.sh" --dist "${DIST_DIR}"
+
+GH_RELEASE_ARGS=(
+  "${RELEASE_TAG}"
+  --repo "${REPO}"
+  --title "${RELEASE_TAG}"
+  --notes-file "${RELEASE_NOTES}"
+)
+if [ "${DRAFT}" = "1" ]; then
+  GH_RELEASE_ARGS+=(--draft)
+fi
+
+echo "== Creating GitHub release ${RELEASE_TAG}$([ "${DRAFT}" = "1" ] && echo ' (draft)') =="
+gh release create "${GH_RELEASE_ARGS[@]}" \
   "${DIST_DIR}"/*.zip \
   "${DIST_DIR}"/*.tar.gz \
   "${DIST_DIR}/CHECKSUMS.txt" \

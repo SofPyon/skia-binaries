@@ -1,0 +1,214 @@
+name: Build and release
+
+on:
+  workflow_dispatch:
+    inputs:
+      slices:
+        description: "Space-separated slice names, or 'all'"
+        type: string
+        default: "all"
+      publish:
+        description: "What to do with the assembled release"
+        type: choice
+        options:
+          - none
+          - draft
+          - publish
+        default: draft
+      xcode:
+        description: "Xcode version to select on macOS runners (e.g. 16.2); leave empty for the runner's default"
+        type: string
+        required: false
+
+# Only one build-release run at a time: it publishes a GitHub release tagged from skia.lock,
+# and two overlapping runs racing scripts/release.sh against the same tag would be confusing at
+# best. The in-progress run is left to finish (not cancelled) since it may already be hours into
+# an 11-slice build.
+concurrency:
+  group: build-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  # Turns the `slices` input into a build matrix (slice -> runner) and reports whether every
+  # slice is included, since only a full set can be assembled into a release below.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      all_slices: ${{ steps.plan.outputs.all_slices }}
+    steps:
+      - name: Build the slice/runner matrix
+        id: plan
+        # `slices` reaches the script through the environment, never through ${{ }} inside the
+        # run body: a dispatch input expanded inline is pasted into the shell before it runs.
+        env:
+          SLICES_INPUT: ${{ inputs.slices }}
+        run: |
+          set -euo pipefail
+
+          ALL_SLICES=(iphoneos-arm64 iphonesimulator-arm64 iphonesimulator-x86_64 xros-arm64 \
+            xrsimulator-arm64 macosx-arm64 macosx-x86_64 maccatalyst-arm64 maccatalyst-x86_64 \
+            linux-arm64 linux-x64)
+
+          INPUT="${SLICES_INPUT}"
+          if [ "${INPUT}" = "all" ]; then
+            SLICES=("${ALL_SLICES[@]}")
+          else
+            read -r -a SLICES <<<"${INPUT}"
+          fi
+          if [ "${#SLICES[@]}" -eq 0 ]; then
+            echo "ERROR: no slices given (slices='${INPUT}')" >&2
+            exit 1
+          fi
+
+          ITEMS_JSON="[]"
+          for slice in "${SLICES[@]}"; do
+            case "${slice}" in
+              linux-arm64) runner="ubuntu-24.04-arm" ;;
+              linux-x64) runner="ubuntu-24.04" ;;
+              iphoneos-arm64 | iphonesimulator-arm64 | iphonesimulator-x86_64 | xros-arm64 | \
+                xrsimulator-arm64 | macosx-arm64 | macosx-x86_64 | maccatalyst-arm64 | maccatalyst-x86_64)
+                runner="macos-15"
+                ;;
+              *)
+                echo "ERROR: unknown slice '${slice}'" >&2
+                echo "Known slices: ${ALL_SLICES[*]}" >&2
+                exit 1
+                ;;
+            esac
+            ITEMS_JSON="$(jq -c --arg slice "${slice}" --arg runner "${runner}" '. + [{"slice":$slice,"runner":$runner}]' <<<"${ITEMS_JSON}")"
+          done
+          MATRIX_JSON="$(jq -c -n --argjson include "${ITEMS_JSON}" '{include:$include}')"
+          echo "matrix=${MATRIX_JSON}" >>"${GITHUB_OUTPUT}"
+
+          SORTED_SELECTED="$(printf '%s\n' "${SLICES[@]}" | sort -u | tr '\n' ',')"
+          SORTED_ALL="$(printf '%s\n' "${ALL_SLICES[@]}" | sort -u | tr '\n' ',')"
+          if [ "${SORTED_SELECTED}" = "${SORTED_ALL}" ]; then
+            echo "all_slices=true" >>"${GITHUB_OUTPUT}"
+          else
+            echo "all_slices=false" >>"${GITHUB_OUTPUT}"
+          fi
+
+  build:
+    needs: plan
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    # An 11-slice Skia build can take hours; the default 6-hour job timeout is generous enough
+    # for the plan/build/assemble split, but a single slice hanging (e.g. a wedged ninja build)
+    # should still be caught well before that, hence the tighter per-job timeout.
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        if: runner.os == 'macOS' && inputs.xcode != ''
+        env:
+          XCODE_VERSION: ${{ inputs.xcode }}
+        run: sudo xcode-select -s "/Applications/Xcode_${XCODE_VERSION}.app"
+
+      # visionOS SDK availability varies by Xcode version and runner image; failing fast here
+      # avoids burning the rest of this timeout on a build that was always going to fail at the
+      # final link step for lack of an SDK.
+      - name: Check visionOS SDK availability
+        if: matrix.slice == 'xros-arm64' || matrix.slice == 'xrsimulator-arm64'
+        run: |
+          if ! xcrun --sdk xros --show-sdk-path >/dev/null 2>&1; then
+            echo "::error::This runner's Xcode has no visionOS SDK (xcrun --sdk xros --show-sdk-path failed). Pick a runner/Xcode with visionOS support to build ${{ matrix.slice }}." >&2
+            exit 1
+          fi
+
+      - name: Disk usage before build
+        run: df -h
+
+      - run: scripts/fetch.sh
+
+      - name: Build slice
+        if: runner.os == 'macOS'
+        env:
+          SLICE: ${{ matrix.slice }}
+        run: scripts/build-slice.sh "${SLICE}"
+
+      - name: Build slice (Linux, via Docker)
+        if: runner.os == 'Linux'
+        # Called explicitly rather than letting build-slice.sh re-exec it: build-slice.sh only
+        # does that when the host isn't Linux, and building directly on this Linux runner would
+        # use its native glibc/libstdc++ instead of the swift:6.2-noble image's, which is what
+        # SwiftPM consumers actually link against (see docker/Dockerfile).
+        env:
+          SLICE: ${{ matrix.slice }}
+        run: scripts/docker-build-linux.sh "${SLICE}"
+
+      - name: Disk usage after build
+        run: df -h
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: slice-${{ matrix.slice }}
+          path: work/skia/out/${{ matrix.slice }}/merged/*.a
+          if-no-files-found: error
+          # These only feed the assemble job in the same run; the release carries the results.
+          retention-days: 3
+
+  # Only meaningful with every slice built: make-xcframework.sh requires all 9 Apple slices and
+  # make-linux-bundle.sh both Linux slices, so a partial build input skips this job entirely.
+  assemble:
+    needs: [plan, build]
+    if: needs.plan.outputs.all_slices == 'true'
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        if: inputs.xcode != ''
+        env:
+          XCODE_VERSION: ${{ inputs.xcode }}
+        run: sudo xcode-select -s "/Applications/Xcode_${XCODE_VERSION}.app"
+
+      # Needed again here (not just in `build`): make-xcframework.sh copies headers from
+      # work/skia/include and third_party/externals/harfbuzz, and collect-licenses.sh reads
+      # license files from third_party/externals - none of that is in the slice artifacts.
+      - run: scripts/fetch.sh
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Place slice artifacts into work/skia/out/<slice>/merged
+        run: |
+          set -euo pipefail
+          for dir in artifacts/slice-*; do
+            slice="$(basename "${dir}" | sed 's/^slice-//')"
+            mkdir -p "work/skia/out/${slice}/merged"
+            cp "${dir}"/*.a "work/skia/out/${slice}/merged/"
+          done
+
+      - run: scripts/make-xcframework.sh
+      - run: scripts/make-linux-bundle.sh
+      - run: scripts/collect-licenses.sh
+      - run: scripts/verify-release.sh --dist dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/CHECKSUMS.txt
+            dist/THIRD_PARTY_NOTICES.txt
+            dist/LICENSES.zip
+
+      - name: Publish draft release
+        if: inputs.publish == 'draft'
+        run: scripts/release.sh --draft
+
+      - name: Publish release
+        if: inputs.publish == 'publish'
+        run: scripts/release.sh

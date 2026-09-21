@@ -1,0 +1,93 @@
+name: Upstream check
+
+on:
+  schedule:
+    # Monday 09:17 UTC. A non-zero minute avoids the top-of-hour pile-up of scheduled
+    # workflows across GitHub, which can delay a `0 * * * *`-style trigger by a long margin.
+    - cron: "17 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run scripts/check-upstream.sh
+        id: check
+        run: |
+          # `set +e` because 10 (update available) and 1 (real failure) are both meaningful
+          # exit codes here, not just "the step failed" - the default `set -e` run-step shell
+          # would abort before the exit code could be captured below.
+          set +e
+          scripts/check-upstream.sh --format=markdown >upstream-report.md
+          CODE=$?
+          set -e
+          echo "exit_code=${CODE}" >>"${GITHUB_OUTPUT}"
+
+      # 0 (in sync) and 10 (update available) are the only codes the script promises; anything
+      # else means it broke, and letting that pass would make the check quietly stop working.
+      - name: Fail on check error
+        if: steps.check.outputs.exit_code != '0' && steps.check.outputs.exit_code != '10'
+        env:
+          CODE: ${{ steps.check.outputs.exit_code }}
+        run: |
+          echo "::error::scripts/check-upstream.sh exited ${CODE} - see its stderr in the previous step"
+          exit 1
+
+      - name: Ensure the upstream-update label exists
+        run: |
+          gh label create upstream-update \
+            --repo "${{ github.repository }}" \
+            --color FBCA04 \
+            --description "mono/skia has moved past the pin in skia.lock" \
+            2>/dev/null || true
+
+      # The title stays fixed (no milestone/branch names) so the same issue is found and
+      # updated on every run instead of a new one being opened each time the pin drifts.
+      - name: Open or update the upstream-update issue
+        if: steps.check.outputs.exit_code == '10'
+        run: |
+          BODY_FILE="$(mktemp)"
+          cat upstream-report.md >"${BODY_FILE}"
+          # Backticks below are literal Markdown code spans, not a forgotten variable
+          # expansion, so this is a quoted heredoc rather than a series of single-quoted echoes.
+          cat >>"${BODY_FILE}" <<'NEXT_STEPS'
+
+          ---
+
+          Next steps in this repository:
+
+          1. `scripts/bump-lock.sh <branch>` — pin skia.lock to the recommended branch above (or another `release/X.Y.Z`)
+          2. `scripts/fetch.sh` — clones the new pin and resolves `HARFBUZZ_COMMIT`
+          3. Build the slices (locally with `scripts/build-slice.sh`, or via the `build-release` workflow) and run `scripts/verify-release.sh`
+          4. `scripts/release.sh` (`--draft` first if you want to check the assets before publishing)
+          NEXT_STEPS
+
+          EXISTING="$(gh issue list --repo "${{ github.repository }}" --state open --label upstream-update --json number --jq '.[0].number // empty')"
+          if [ -n "${EXISTING}" ]; then
+            gh issue edit "${EXISTING}" --repo "${{ github.repository }}" --body-file "${BODY_FILE}"
+            echo "Updated issue #${EXISTING}"
+          else
+            gh issue create --repo "${{ github.repository }}" --title "Skia upstream update available" \
+              --label upstream-update --body-file "${BODY_FILE}"
+          fi
+
+      - name: Close a stale upstream-update issue
+        if: steps.check.outputs.exit_code == '0'
+        run: |
+          EXISTING="$(gh issue list --repo "${{ github.repository }}" --state open --label upstream-update --json number --jq '.[0].number // empty')"
+          if [ -n "${EXISTING}" ]; then
+            gh issue comment "${EXISTING}" --repo "${{ github.repository }}" \
+              --body "skia.lock is back in sync with mono/skia (checked by the scheduled upstream-check workflow). Closing."
+            gh issue close "${EXISTING}" --repo "${{ github.repository }}"
+          else
+            echo "No open upstream-update issue to close."
+          fi

@@ -31,7 +31,11 @@ to their own location.
 | `scripts/make-xcframework.sh` | Assemble the Apple slices (lipo'd into one fat library per platform) and headers into xcframeworks, then zip them. Rewrites `CHECKSUMS.txt`. |
 | `scripts/make-linux-bundle.sh` | Package the Linux slices as pkg-config tarballs. Appends to `CHECKSUMS.txt`, so run it after `make-xcframework.sh`. |
 | `scripts/collect-licenses.sh` | Gather license texts of Skia and its third-party dependencies. |
-| `scripts/release.sh` | Publish the built zips and checksums as a GitHub release. |
+| `scripts/release.sh` | Publish the built zips and checksums as a GitHub release. Accepts `--draft`; refuses to run if `RELEASE_TAG` already has a release, or if `scripts/verify-release.sh` finds a problem with `dist/`. |
+| `scripts/check-lock.sh` | Validate `skia.lock`'s shape (sourceable, every variable but `HARFBUZZ_COMMIT` non-empty). Run standalone or from CI. |
+| `scripts/check-upstream.sh` | Report how far `skia.lock`'s pin is behind `mono/skia`. See [Maintenance](#maintenance). |
+| `scripts/bump-lock.sh <branch\|commit>` | Advance `skia.lock`'s pin to a new branch or commit, blanking `HARFBUZZ_COMMIT` for `scripts/fetch.sh` to re-resolve. |
+| `scripts/verify-release.sh` | Verify a built `dist/` (`--dist <dir>`) or a published release (`--tag <tag>`) matches this repo's asset/checksum/layout contract. |
 
 Supported slices: `iphoneos-arm64`, `iphonesimulator-arm64`, `iphonesimulator-x86_64`,
 `xros-arm64`, `xrsimulator-arm64`, `macosx-arm64`, `macosx-x86_64`, `maccatalyst-arm64`,
@@ -53,8 +57,51 @@ done
 scripts/make-xcframework.sh
 scripts/make-linux-bundle.sh
 scripts/collect-licenses.sh
-scripts/release.sh
+scripts/release.sh --draft   # or scripts/release.sh to publish directly
 ```
+
+The `build-release` GitHub Actions workflow (`.github/workflows/build-release.yml`) runs the
+same flow on hosted runners: `workflow_dispatch` with a `slices` input (a space-separated list,
+or `all`), a `publish` choice (`none`/`draft`/`publish`), and an optional `xcode` version. It
+only assembles and releases when every slice was requested; a partial run uploads the built
+`.a` files as artifacts without going further.
+
+## Maintenance
+
+mono/skia's release branches follow `release/<major>.<milestone>.<patch>`, where `<milestone>`
+is the same Skia milestone number as `SKIA_MILESTONE`/`SkMilestone.h`. A `-preview.N` or `-rc.N`
+suffix, or a `.x` patch component, marks a provisional branch that hasn't cut a stable patch
+yet. Tags on that repository stopped being maintained after 4.148, so `scripts/check-upstream.sh`
+tracks branches instead, using only `git ls-remote --heads` (no clone): it compares
+`MONO_SKIA_BRANCH`/`MONO_SKIA_COMMIT` against the current state of `MONO_SKIA_REPO` and reports
+ref drift, newer same-milestone patches, and newer milestones (stable and provisional
+separately).
+
+`scripts/check-upstream.sh` exits `0` when the pin is current, `10` when an update is available,
+and `1` if the check itself failed (bad `skia.lock`, network error, ...). The `upstream-check`
+workflow runs it weekly and files (or updates) a `upstream-update`-labelled issue with the
+result when exit code `10` is reported, closing that issue once a later run reports `0`.
+
+The `lint` workflow runs shellcheck, actionlint and `scripts/check-lock.sh` on every push and
+pull request. It pins both linters so a local run and a CI run agree, running the same two
+commands:
+
+```sh
+docker run --rm -v "${PWD}:/mnt" koalaman/shellcheck:v0.11.0 scripts/*.sh
+docker run --rm -v "${PWD}:/repo" -w /repo rhysd/actionlint:1.7.12 -color
+```
+
+The loop from an upstream update to a new release:
+
+1. The scheduled `upstream-check` workflow opens or refreshes the `upstream-update` issue.
+2. `scripts/bump-lock.sh <branch>` pins `skia.lock` to the new branch (or a raw commit with
+   `--milestone`), blanking `HARFBUZZ_COMMIT`.
+3. `scripts/fetch.sh` clones the new pin, confirms `SkMilestone.h` agrees with
+   `SKIA_MILESTONE`, and resolves `HARFBUZZ_COMMIT` back into `skia.lock`.
+4. Build the slices, either locally (`scripts/build-slice.sh`) or via the `build-release`
+   workflow.
+5. `scripts/verify-release.sh` checks the assembled `dist/` before anything is published.
+6. `scripts/release.sh` (`--draft` first, if you want to inspect the release before publishing).
 
 ## Using the binaries
 
