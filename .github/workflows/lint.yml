@@ -15,9 +15,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ubuntu-latest ships shellcheck preinstalled, so no separate install step is needed.
+      # Pinned rather than using the runner's preinstalled shellcheck: the two differ, and the
+      # same finding is reported under a different code by each (SC2317 vs SC2329), so an
+      # unpinned linter turns a green local run into a red CI run for no change of ours.
+      # README's Maintenance section names the identical command to run locally.
       - name: shellcheck
-        run: shellcheck scripts/*.sh
+        run: docker run --rm -v "${PWD}:/mnt" koalaman/shellcheck:v0.11.0 scripts/*.sh
 
       # download-actionlint.bash is fetched from a tagged (immutable) ref and given an explicit
       # version, rather than "latest", so this step's behavior can't change under us.

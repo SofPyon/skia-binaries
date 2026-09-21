@@ -79,10 +79,18 @@ skip() {
 
 CLEANUP_DIR=""
 PLIST_LOOKUP_PY=""
-# shellcheck disable=SC2329  # only called indirectly, via the `trap ... EXIT` below
+# SC2317/SC2329 are the same finding under different shellcheck versions: this is only ever
+# called indirectly, via the `trap ... EXIT` below.
+# shellcheck disable=SC2317,SC2329
 cleanup() {
-  [ -n "${CLEANUP_DIR}" ] && rm -rf "${CLEANUP_DIR}"
-  [ -n "${PLIST_LOOKUP_PY}" ] && rm -f "${PLIST_LOOKUP_PY}"
+  # Separate `if`s rather than `[ ... ] && ...`: under `set -e` a false test in the first line
+  # would return from the function and leak the second temporary.
+  if [ -n "${CLEANUP_DIR}" ]; then
+    rm -rf "${CLEANUP_DIR}"
+  fi
+  if [ -n "${PLIST_LOOKUP_PY}" ]; then
+    rm -f "${PLIST_LOOKUP_PY}"
+  fi
 }
 trap cleanup EXIT
 

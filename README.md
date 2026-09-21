@@ -82,6 +82,13 @@ and `1` if the check itself failed (bad `skia.lock`, network error, ...). The `u
 workflow runs it weekly and files (or updates) a `upstream-update`-labelled issue with the
 result when exit code `10` is reported, closing that issue once a later run reports `0`.
 
+The `lint` workflow runs shellcheck, actionlint and `scripts/check-lock.sh` on every push and
+pull request. It pins both linters so a local run and a CI run agree; the shellcheck command is
+
+```sh
+docker run --rm -v "${PWD}:/mnt" koalaman/shellcheck:v0.11.0 scripts/*.sh
+```
+
 The loop from an upstream update to a new release:
 
 1. The scheduled `upstream-check` workflow opens or refreshes the `upstream-update` issue.
