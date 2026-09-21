@@ -1,0 +1,33 @@
+name: Lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ubuntu-latest ships shellcheck preinstalled, so no separate install step is needed.
+      - name: shellcheck
+        run: shellcheck scripts/*.sh
+
+      # download-actionlint.bash is fetched from a tagged (immutable) ref and given an explicit
+      # version, rather than "latest", so this step's behavior can't change under us.
+      - name: Install actionlint
+        run: |
+          bash <(curl -fsSL "https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash") 1.7.12 "${RUNNER_TEMP}/bin"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+
+      - name: actionlint
+        run: actionlint -color
+
+      - name: Validate skia.lock
+        run: scripts/check-lock.sh
