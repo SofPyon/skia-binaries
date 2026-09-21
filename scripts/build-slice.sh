@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-# shellcheck disable=SC1090
+# shellcheck disable=SC1090,SC1091  # skia.lock's path is resolved at runtime; shellcheck can't follow it statically
 source "${ROOT_DIR}/skia.lock"
 
 APPLE_SLICES=(iphoneos-arm64 iphonesimulator-arm64 iphonesimulator-x86_64 xros-arm64 xrsimulator-arm64
