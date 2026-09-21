@@ -23,8 +23,9 @@ state of MONO_SKIA_REPO (via `git ls-remote --heads`, no clone) and reports:
   - skia-sync/m<N> branches ahead of the pinned milestone, for reference
 
 Exit codes:
-  0   pin is up to date
-  10  an update is available (drift, newer patch, and/or newer milestone)
+  0   nothing to take (provisional branches ahead still count as nothing)
+  10  a stable update is available: ref drift, a newer patch on this milestone,
+      or a newer stable milestone
   1   the check failed (bad skia.lock, network error, ...)
 USAGE
 }
@@ -194,9 +195,13 @@ for entry in "${NEW_MILESTONE_STABLE[@]:-}"; do
   consider_stable "${branch}" "${sha}" "${milestone}" "${major}" "${patch}"
 done
 
+# Provisional (-preview/-rc/.x) and skia-sync branches are reported but do not raise the flag:
+# they exist continuously between stable cuts, so counting them would leave the caller — and the
+# issue the scheduled workflow keeps in sync — permanently signalling an update that the
+# recommendation itself says not to take.
 UPDATE_AVAILABLE=0
 if [ "${DRIFTED}" -eq 1 ] || [ "${BRANCH_MISSING}" -eq 1 ] || [ "${#SAME_MILESTONE_PATCHES[@]}" -gt 0 ] \
-  || [ "${#NEW_MILESTONE_STABLE[@]}" -gt 0 ] || [ "${#NEW_MILESTONE_PROVISIONAL[@]}" -gt 0 ]; then
+  || [ "${#NEW_MILESTONE_STABLE[@]}" -gt 0 ]; then
   UPDATE_AVAILABLE=1
 fi
 

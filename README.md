@@ -77,10 +77,13 @@ tracks branches instead, using only `git ls-remote --heads` (no clone): it compa
 ref drift, newer same-milestone patches, and newer milestones (stable and provisional
 separately).
 
-`scripts/check-upstream.sh` exits `0` when the pin is current, `10` when an update is available,
-and `1` if the check itself failed (bad `skia.lock`, network error, ...). The `upstream-check`
-workflow runs it weekly and files (or updates) a `upstream-update`-labelled issue with the
-result when exit code `10` is reported, closing that issue once a later run reports `0`.
+`scripts/check-upstream.sh` exits `0` when there is nothing to take, `10` when a stable update
+is available — ref drift, a newer patch on this milestone, or a newer stable milestone — and `1`
+if the check itself failed (bad `skia.lock`, network error, ...). Provisional branches are listed
+in the report but never raise the flag on their own: they sit upstream continuously between
+stable cuts, so counting them would hold the issue open forever. The `upstream-check` workflow
+runs it weekly and files (or updates) a `upstream-update`-labelled issue with the result when
+exit code `10` is reported, closing that issue once a later run reports `0`.
 
 The `lint` workflow runs shellcheck, actionlint and `scripts/check-lock.sh` on every push and
 pull request. It pins both linters so a local run and a CI run agree, running the same two
