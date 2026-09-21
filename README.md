@@ -83,10 +83,12 @@ workflow runs it weekly and files (or updates) a `upstream-update`-labelled issu
 result when exit code `10` is reported, closing that issue once a later run reports `0`.
 
 The `lint` workflow runs shellcheck, actionlint and `scripts/check-lock.sh` on every push and
-pull request. It pins both linters so a local run and a CI run agree; the shellcheck command is
+pull request. It pins both linters so a local run and a CI run agree, running the same two
+commands:
 
 ```sh
 docker run --rm -v "${PWD}:/mnt" koalaman/shellcheck:v0.11.0 scripts/*.sh
+docker run --rm -v "${PWD}:/repo" -w /repo rhysd/actionlint:1.7.12 -color
 ```
 
 The loop from an upstream update to a new release:
