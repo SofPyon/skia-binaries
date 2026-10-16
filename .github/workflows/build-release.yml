@@ -154,8 +154,9 @@ jobs:
           # These only feed the assemble job in the same run; the release carries the results.
           retention-days: 3
 
-  # Only meaningful with every slice built: make-xcframework.sh requires all 9 Apple slices and
-  # make-linux-bundle.sh both Linux slices, so a partial build input skips this job entirely.
+  # Only meaningful with every slice built: make-xcframework.sh requires all 9 Apple slices, and
+  # make-linux-bundle.sh (with make-linux-artifactbundle.sh after it) both Linux slices, so a
+  # partial build input skips this job entirely.
   assemble:
     needs: [plan, build]
     if: needs.plan.outputs.all_slices == 'true'
@@ -192,6 +193,8 @@ jobs:
 
       - run: scripts/make-xcframework.sh
       - run: scripts/make-linux-bundle.sh
+      # Reads the tarballs make-linux-bundle.sh just wrote, so it has to follow it.
+      - run: scripts/make-linux-artifactbundle.sh
       - run: scripts/collect-licenses.sh
       - run: scripts/verify-release.sh --dist dist
 
