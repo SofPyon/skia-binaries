@@ -47,6 +47,8 @@ fi
 REQUIRED_FILES=(
   "${DIST_DIR}/libSkiaSharp.xcframework.zip"
   "${DIST_DIR}/libHarfBuzzSharp.xcframework.zip"
+  "${DIST_DIR}/libSkiaSharp-linux.artifactbundle.zip"
+  "${DIST_DIR}/libHarfBuzzSharp-linux.artifactbundle.zip"
   "${DIST_DIR}/skiasharp-linux-arm64.tar.gz"
   "${DIST_DIR}/skiasharp-linux-x64.tar.gz"
   "${DIST_DIR}/CHECKSUMS.txt"
@@ -55,25 +57,32 @@ REQUIRED_FILES=(
 )
 for f in "${REQUIRED_FILES[@]}"; do
   if [ ! -f "${f}" ]; then
-    echo "ERROR: missing ${f} - run scripts/make-xcframework.sh, scripts/make-linux-bundle.sh and scripts/collect-licenses.sh first" >&2
+    echo "ERROR: missing ${f} - run scripts/make-xcframework.sh, scripts/make-linux-bundle.sh, scripts/make-linux-artifactbundle.sh and scripts/collect-licenses.sh first" >&2
     exit 1
   fi
 done
 
 RELEASE_NOTES="${DIST_DIR}/RELEASE-NOTES.md"
 cat > "${RELEASE_NOTES}" <<EOF
-Prebuilt Skia (SkiaSharp C API) static libraries: xcframeworks for Apple platforms and
-pkg-config tarballs for Linux.
+Prebuilt Skia (SkiaSharp C API) static libraries: xcframeworks for Apple platforms, and
+SwiftPM artifact bundles plus pkg-config tarballs for Linux.
 
 - Skia commit: ${MONO_SKIA_COMMIT} (mono/skia, milestone ${SKIA_MILESTONE})
 - xcframework libraries: iphoneos (arm64), iphonesimulator (arm64, x86_64), xros (arm64),
   xrsimulator (arm64), macosx (arm64, x86_64), maccatalyst (arm64, x86_64)
-- Linux tarballs: skiasharp-linux-arm64.tar.gz, skiasharp-linux-x64.tar.gz (static archives
-  built on swift:6.4-noble, see docker/Dockerfile; fontconfig is linked from the system)
+- Linux artifact bundles: libSkiaSharp-linux.artifactbundle.zip,
+  libHarfBuzzSharp-linux.artifactbundle.zip (SE-0482 \`staticLibrary\` artifacts for a SwiftPM
+  \`binaryTarget\`, one variant per architecture: aarch64-unknown-linux-gnu,
+  x86_64-unknown-linux-gnu)
+- Linux tarballs: skiasharp-linux-arm64.tar.gz, skiasharp-linux-x64.tar.gz (the same archives
+  and headers with pkg-config files, for build systems other than SwiftPM)
+- Both Linux forms are built on swift:6.4-noble, see docker/Dockerfile; fontconfig is linked
+  from the system
 - Minimum OS versions: iOS ${MIN_IOS}, macOS ${MIN_MACOS}, visionOS ${MIN_VISIONOS},
   Mac Catalyst ${MIN_MACCATALYST}
 
-See CHECKSUMS.txt for Swift Package \`binaryTarget\` checksums and the tarballs' SHA-256,
+See CHECKSUMS.txt for Swift Package \`binaryTarget\` checksums (xcframeworks and artifact
+bundles) and the tarballs' SHA-256,
 and THIRD_PARTY_NOTICES.txt for bundled third-party licenses.
 EOF
 
@@ -97,11 +106,15 @@ gh release create "${GH_RELEASE_ARGS[@]}" \
   "${DIST_DIR}/CHECKSUMS.txt" \
   "${DIST_DIR}/THIRD_PARTY_NOTICES.txt"
 
-echo "== Package.swift binaryTarget snippet =="
+# One snippet per asset that carries a swift-package-checksum: the Apple xcframeworks and the
+# Linux artifact bundles. The target name is the asset's basename minus the archive suffix, so
+# a Linux bundle's target is named lib<Name>-linux and an xcframework's lib<Name>.
+echo "== Package.swift binaryTarget snippets =="
 while IFS= read -r line; do
   case "${line}" in
-    lib*.xcframework.zip)
-      NAME="${line%.xcframework.zip}"
+    lib*.xcframework.zip | lib*.artifactbundle.zip)
+      ASSET="${line}"
+      NAME="${ASSET%%.*}"
       ;;
     "  swift-package-checksum:"*)
       CHECKSUM="$(echo "${line}" | awk '{print $2}')"
@@ -109,7 +122,7 @@ while IFS= read -r line; do
 
 .binaryTarget(
     name: "${NAME}",
-    url: "https://github.com/${REPO}/releases/download/${RELEASE_TAG}/${NAME}.xcframework.zip",
+    url: "https://github.com/${REPO}/releases/download/${RELEASE_TAG}/${ASSET}",
     checksum: "${CHECKSUM}"
 )
 SNIPPET

@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Packages the Linux slices as relocatable tarballs. SwiftPM has no binary targets on Linux,
-# so consumers unpack one of these and point PKG_CONFIG_PATH at its lib/pkgconfig; a
-# `.systemLibrary(name: "CSkia", pkgConfig: "SkiaSharp")` then picks up the include path and
-# the static archives. The header layout is the same as in the xcframeworks
-# (include/c/*.h for Skia, harfbuzz/hb*.h for HarfBuzz), one directory per module.
+# Packages the Linux slices as relocatable tarballs: a consumer unpacks one and points
+# PKG_CONFIG_PATH at its lib/pkgconfig, and a `.systemLibrary(name: "CSkia",
+# pkgConfig: "SkiaSharp")` then picks up the include path and the static archives. SwiftPM
+# consumers have the artifact bundles from make-linux-artifactbundle.sh instead, which need
+# neither step; these tarballs stay for build systems that read pkg-config. The header layout
+# is the same as in the xcframeworks (include/c/*.h for Skia, harfbuzz/hb*.h for HarfBuzz), one
+# directory per module.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
