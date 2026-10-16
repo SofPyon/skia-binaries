@@ -44,6 +44,8 @@ for SLICE in "${SLICES[@]}"; do
 
   echo "== Assembling ${BUNDLE_NAME} =="
   cp "${SKIA_DIR}"/include/c/*.h "${STAGE_DIR}/include/SkiaSharp/include/c/"
+  mkdir -p "${STAGE_DIR}/include/SkiaSharp/include/skb"
+  cp "${ROOT_DIR}"/capi/include/skb/*.h "${STAGE_DIR}/include/SkiaSharp/include/skb/"
   find "${SKIA_DIR}/third_party/externals/harfbuzz/src" -maxdepth 1 -name 'hb*.h' \
     -exec cp {} "${STAGE_DIR}/include/HarfBuzzSharp/harfbuzz/" \;
   cp "${MERGED_DIR}/libSkiaSharp.a" "${MERGED_DIR}/libHarfBuzzSharp.a" "${STAGE_DIR}/lib/"

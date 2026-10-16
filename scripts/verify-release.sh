@@ -222,7 +222,7 @@ maccatalyst ios maccatalyst arm64,x86_64
 "
 
 verify_xcframework() {
-  local zip_name="$1" fw_name="$2" header_check="$3"
+  local zip_name="$1" fw_name="$2" header_check
   local zip_path="${DIST_DIR}/${zip_name}"
   if [ ! -f "${zip_path}" ]; then
     fail "cannot verify ${zip_name}: file missing"
@@ -299,13 +299,13 @@ verify_xcframework() {
         fi
       fi
 
-      if [ -n "${header_check}" ]; then
+      for header_check in "${@:3}"; do
         if [ -f "${fw_dir}/${lib_id}/Headers/${header_check}" ]; then
           pass "${zip_name} [${key}]: header at Headers/${header_check}"
         else
           fail "${zip_name} [${key}]: missing Headers/${header_check}"
         fi
-      fi
+      done
     done <<<"${XCFRAMEWORK_PLATFORMS}"
   fi
 
@@ -313,7 +313,7 @@ verify_xcframework() {
 }
 
 echo "== Verifying libSkiaSharp.xcframework.zip =="
-verify_xcframework "libSkiaSharp.xcframework.zip" "libSkiaSharp.xcframework" "include/c/sk_types.h"
+verify_xcframework "libSkiaSharp.xcframework.zip" "libSkiaSharp.xcframework" "include/c/sk_types.h" "include/skb/skb_contourmeasure.h"
 
 echo "== Verifying libHarfBuzzSharp.xcframework.zip =="
 verify_xcframework "libHarfBuzzSharp.xcframework.zip" "libHarfBuzzSharp.xcframework" "harfbuzz/hb.h"
@@ -342,6 +342,7 @@ verify_linux_tarball() {
     "lib/pkgconfig/SkiaSharp.pc"
     "lib/pkgconfig/HarfBuzzSharp.pc"
     "include/SkiaSharp/include/c/sk_types.h"
+    "include/SkiaSharp/include/skb/skb_contourmeasure.h"
     "include/HarfBuzzSharp/harfbuzz/hb.h"
     "BUILD-INFO.txt"
   )
@@ -421,7 +422,7 @@ for variant in artifact["variants"]:
 INFOPY
 
 verify_linux_artifactbundle() {
-  local zip_name="$1" identifier="$2" header_check="$3"
+  local zip_name="$1" identifier="$2" header_check
   local zip_path="${DIST_DIR}/${zip_name}"
   if [ ! -f "${zip_path}" ]; then
     fail "cannot verify ${zip_name}: file missing"
@@ -493,11 +494,13 @@ verify_linux_artifactbundle() {
     fail "${zip_name}: variants cover '${sorted_seen}', expected 'aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu '"
   fi
 
-  if [ -f "${bundle_dir}/Headers/${header_check}" ]; then
-    pass "${zip_name}: header at Headers/${header_check}"
-  else
-    fail "${zip_name}: missing Headers/${header_check}"
-  fi
+  for header_check in "${@:3}"; do
+    if [ -f "${bundle_dir}/Headers/${header_check}" ]; then
+      pass "${zip_name}: header at Headers/${header_check}"
+    else
+      fail "${zip_name}: missing Headers/${header_check}"
+    fi
+  done
 
   if [ -f "${bundle_dir}/BUILD-INFO.txt" ]; then
     local recorded_commit
@@ -516,7 +519,7 @@ verify_linux_artifactbundle() {
 
 echo "== Verifying libSkiaSharp-linux.artifactbundle.zip =="
 verify_linux_artifactbundle "libSkiaSharp-linux.artifactbundle.zip" "libSkiaSharp" \
-  "include/c/sk_types.h"
+  "include/c/sk_types.h" "include/skb/skb_contourmeasure.h"
 echo "== Verifying libHarfBuzzSharp-linux.artifactbundle.zip =="
 verify_linux_artifactbundle "libHarfBuzzSharp-linux.artifactbundle.zip" "libHarfBuzzSharp" \
   "harfbuzz/hb.h"

@@ -269,10 +269,68 @@ echo "== ninja ${NINJA_TARGETS[*]} =="
   "${NINJA}" -C "${OUT_SUBDIR}" "${NINJA_TARGETS[@]}"
 )
 
+# Compile this repository's wrappers with the same flags as mono/skia's C API.
+python3 - "${ROOT_DIR}" "${SKIA_DIR}" "${OUT_SUBDIR}" "${NINJA}" <<'CAPIPY'
+import json
+from pathlib import Path
+import shlex
+import subprocess
+import sys
+
+root, skia, out_subdir, ninja = sys.argv[1:]
+sources = sorted((Path(root) / "capi/src").glob("*.cpp"))
+out = Path(skia) / out_subdir
+archive = out / "libskb_capi.a"
+archive.unlink(missing_ok=True)
+if not sources:
+    sys.exit(0)
+entries = json.loads(subprocess.check_output(
+    [ninja, "-C", out_subdir, "-t", "compdb"], cwd=skia, text=True))
+reference = "../../src/c/sk_path.cpp"
+entry = next((e for e in entries if e["file"] == reference), None)
+if entry is None:
+    sys.exit(f"ERROR: ninja -t compdb in {out}: no entry for {reference}")
+command = shlex.split(entry["command"])
+cwd = Path(entry["directory"])
+if not cwd.is_absolute():
+    cwd = Path(skia) / cwd
+objects = []
+for source in sources:
+    obj = out / (source.stem + ".o")
+    args = []
+    i = 0
+    replaced_input = replaced_output = False
+    while i < len(command):
+        arg = command[i]
+        if arg in ("-MF", "-MT", "-MQ"):
+            i += 2
+            continue
+        if arg in ("-MD", "-MMD", "-MP") or arg.startswith(("-MF", "-MT", "-MQ")):
+            i += 1
+            continue
+        if arg == "-o":
+            args.extend(["-o", str(obj)])
+            replaced_output = True
+            i += 2
+            continue
+        if arg == reference:
+            arg = str(source)
+            replaced_input = True
+        args.append(arg)
+        i += 1
+    if not replaced_input or not replaced_output:
+        sys.exit(f"ERROR: cannot replace input/output in compdb command for {reference}")
+    args.extend(["-I", str(Path(root) / "capi")])
+    print(f"== Compiling {source.name} ==", flush=True)
+    subprocess.run(args, cwd=cwd, check=True)
+    objects.append(str(obj))
+subprocess.run(["ar", "rcs", str(archive), *objects], check=True)
+CAPIPY
+
 # gn's `complete_static_lib` does not fold the dependency archives into libSkiaSharp.a on
 # either toolchain (the archive only carries the C API shims and a few objects), so every
-# archive ninja produced except HarfBuzz is merged into one libSkiaSharp.a under merged/.
-# HarfBuzz stays separate; it is its own module.
+# archive except HarfBuzz, including this repository's wrappers, is merged into one
+# libSkiaSharp.a under merged/. HarfBuzz stays separate; it is its own module.
 MERGED_DIR="${OUT_DIR}/merged"
 rm -rf "${MERGED_DIR}"
 mkdir -p "${MERGED_DIR}"
@@ -318,10 +376,10 @@ HB_LIB="${MERGED_DIR}/libHarfBuzzSharp.a"
 # Mach-O prefixes C symbols with an underscore; ELF does not.
 if [ "${HOST_OS}" = "Linux" ]; then
   SYM=""
-  EXPECTED_SKIA_SYMBOLS=(sk_canvas_draw_path sk_pathop_op sk_surface_new_raster)
+  EXPECTED_SKIA_SYMBOLS=(sk_canvas_draw_path sk_pathop_op sk_surface_new_raster skb_contourmeasureiter_new skb_contourmeasure_get_length)
 else
   SYM="_"
-  EXPECTED_SKIA_SYMBOLS=(sk_canvas_draw_path sk_pathop_op sk_surface_new_metal_layer)
+  EXPECTED_SKIA_SYMBOLS=(sk_canvas_draw_path sk_pathop_op sk_surface_new_metal_layer skb_contourmeasureiter_new skb_contourmeasure_get_length)
 fi
 SKIA_SYMBOL_COUNT=0
 NM_OUTPUT="$(nm -g "${SKIA_LIB}" 2>/dev/null || true)"
@@ -403,31 +461,62 @@ cat >"${TMP_EXTRACT_DIR}/smoke.c" <<'SMOKE'
 #include "include/c/sk_canvas.h"
 #include "include/c/sk_paint.h"
 #include "include/c/sk_path.h"
+#include "include/c/sk_pathbuilder.h"
 #include "include/c/sk_surface.h"
 #include "include/c/sk_document.h"
 #include "include/c/sk_typeface.h"
+#include "include/skb/skb_contourmeasure.h"
 #include "hb.h"
+#include <math.h>
+#include <stdio.h>
 int main(void) {
   sk_imageinfo_t info = {0, 4, 4, RGBA_8888_SK_COLORTYPE, PREMUL_SK_ALPHATYPE};
   sk_surface_t* surface = sk_surface_new_raster(&info, 0, 0);
   sk_canvas_t* canvas = sk_surface_get_canvas(surface);
-  sk_path_t* path = sk_path_new();
+  sk_pathbuilder_t* builder = sk_pathbuilder_new();
+  sk_rect_t rect = {0, 0, 100, 50};
+  sk_pathbuilder_add_rect(builder, &rect, CW_SK_PATH_DIRECTION);
+  sk_pathbuilder_move_to(builder, 200, 0);
+  sk_pathbuilder_line_to(builder, 250, 50);
+  sk_path_t* path = sk_pathbuilder_detach_path(builder);
+  sk_pathbuilder_delete(builder);
+  sk_pathmeasure_t* measure = sk_pathmeasure_new_with_path(path, false, 1);
+  skb_contourmeasureiter_t* iter = skb_contourmeasureiter_new(path, false, 1);
+  /* Both skip zero-length contours, so a positive length means the measure is on a contour. */
+  bool measure_on_contour = sk_pathmeasure_get_length(measure) > 0;
+  int failed = 0;
+  skb_contourmeasure_t* contour;
+  while ((contour = skb_contourmeasureiter_next(iter)) != NULL) {
+    if (!measure_on_contour ||
+        fabsf(skb_contourmeasure_get_length(contour) - sk_pathmeasure_get_length(measure)) > 1e-4f) {
+      fprintf(stderr, "skb_contourmeasure and sk_pathmeasure disagree on a contour\n");
+      failed = 1;
+    }
+    measure_on_contour = measure_on_contour && sk_pathmeasure_next_contour(measure);
+    skb_contourmeasure_unref(contour);
+  }
+  if (measure_on_contour) {
+    fprintf(stderr, "sk_pathmeasure found more contours than skb_contourmeasureiter\n");
+    failed = 1;
+  }
+  skb_contourmeasureiter_delete(iter);
+  sk_pathmeasure_destroy(measure);
   sk_paint_t* paint = sk_paint_new();
   sk_canvas_draw_path(canvas, path, paint);
   sk_pathop_op(path, path, UNION_SK_PATHOP, path);
   sk_fontmgr_t* fontmgr = sk_fontmgr_create_default();
   hb_buffer_t* buffer = hb_buffer_create();
   hb_buffer_destroy(buffer);
-  (void)fontmgr;
+  sk_fontmgr_unref(fontmgr);
   sk_paint_delete(paint);
   sk_path_delete(path);
   sk_surface_unref(surface);
-  return 0;
+  return failed ? 1 : 0;
 }
 SMOKE
 if [ "${HOST_OS}" = "Linux" ]; then
   # The same flags consumers get from the bundled pkg-config files (see make-linux-bundle.sh).
-  clang -I "${SKIA_DIR}" -I "${SKIA_DIR}/third_party/externals/harfbuzz/src" \
+  clang -I "${SKIA_DIR}" -I "${ROOT_DIR}/capi" -I "${SKIA_DIR}/third_party/externals/harfbuzz/src" \
     "${TMP_EXTRACT_DIR}/smoke.c" "${SKIA_LIB}" "${HB_LIB}" \
     -l:libfontconfig.so.1 -lstdc++ -lm -lpthread -ldl \
     -o "${TMP_EXTRACT_DIR}/smoke"
@@ -460,10 +549,16 @@ else
       ;;
   esac
   xcrun --sdk "${LINK_SDK}" clang -target "${LINK_TARGET}" ${LINK_EXTRA[@]+"${LINK_EXTRA[@]}"} \
-    -I "${SKIA_DIR}" -I "${SKIA_DIR}/third_party/externals/harfbuzz/src" \
+    -I "${SKIA_DIR}" -I "${ROOT_DIR}/capi" -I "${SKIA_DIR}/third_party/externals/harfbuzz/src" \
     "${TMP_EXTRACT_DIR}/smoke.c" "${SKIA_LIB}" "${HB_LIB}" -lc++ "${LINK_FRAMEWORKS[@]}" \
     -o "${TMP_EXTRACT_DIR}/smoke"
-  echo "link smoke test passed"
+  # A macOS slice for the host's own CPU can also run, which compares the measurements.
+  if [ "${SLICE}" = "macosx-$(uname -m)" ]; then
+    "${TMP_EXTRACT_DIR}/smoke"
+    echo "link and run smoke test passed"
+  else
+    echo "link smoke test passed"
+  fi
 fi
 
 echo "== Summary =="

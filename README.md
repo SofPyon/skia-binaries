@@ -119,8 +119,8 @@ The loop from an upstream update to a new release:
 
 The xcframeworks carry static libraries and headers only. Header layout:
 
-- `libSkiaSharp.xcframework`: `Headers/include/c/*.h` (the headers include each other as
-  `"include/c/sk_types.h"`, so the prefix is part of the API)
+- `libSkiaSharp.xcframework`: `Headers/include/c/*.h` and `Headers/include/skb/*.h`
+  (the headers include each other as `"include/c/sk_types.h"`, so the prefix is part of the API)
 - `libHarfBuzzSharp.xcframework`: `Headers/harfbuzz/hb*.h`
 
 They deliberately ship no `module.modulemap`: SwiftPM copies every binary target's
@@ -139,6 +139,15 @@ Targets that use them link `c++` and the frameworks Skia's Apple ports need:
 Foundation, CoreFoundation, CoreGraphics, CoreText, ImageIO, Metal, plus UIKit and
 MobileCoreServices on iOS/visionOS, AppKit and ApplicationServices on macOS, or UIKit on
 Mac Catalyst.
+
+`include/skb/*.h` holds this repository's own C wrappers with the `skb_` prefix.
+mono/skia owns `include/c/` and the `sk_` prefix; separate names prevent collisions
+if mono/skia later adds the same API.
+
+Adding a wrapper: put its header in `capi/include/skb/` and source in `capi/src/`.
+The build compiles it with the flags ninja used for mono/skia's C API and folds it
+into `libSkiaSharp.a`. Add the header to `modulemap/CSkia/CSkia.h` and extend the
+symbol check and smoke test in `scripts/build-slice.sh`.
 
 ### Linux
 
@@ -161,7 +170,8 @@ involved; the declaration looks like the Apple one:
 Each bundle holds one `staticLibrary` artifact with two variants, `linux-arm64/lib*.a` for
 `aarch64-unknown-linux-gnu` and `linux-x64/lib*.a` for `x86_64-unknown-linux-gnu`, and one
 `Headers/` directory shared by both, which SwiftPM puts on the include path (the same layout as
-the xcframeworks: `Headers/include/c/*.h` for Skia, `Headers/harfbuzz/hb*.h` for HarfBuzz).
+the xcframeworks: `Headers/include/c/*.h` and `Headers/include/skb/*.h` for Skia,
+`Headers/harfbuzz/hb*.h` for HarfBuzz).
 
 The bundles name no `moduleMapPath`, so the consuming package declares the module, as it does
 for the xcframeworks. A bundle could carry one — SwiftPM passes each bundle's `headerPaths` as

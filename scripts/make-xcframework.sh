@@ -33,6 +33,8 @@ echo "== Assembling headers =="
 # module.modulemap"). Consumers declare the modules themselves; see modulemap/ and README.md.
 # The Skia C API headers include each other as "include/c/sk_types.h", so that layout is kept.
 cp "${SKIA_DIR}"/include/c/*.h "${HEADERS_DIR}/CSkia/include/c/"
+mkdir -p "${HEADERS_DIR}/CSkia/include/skb"
+cp "${ROOT_DIR}"/capi/include/skb/*.h "${HEADERS_DIR}/CSkia/include/skb/"
 
 HARFBUZZ_SRC_DIR="${SKIA_DIR}/third_party/externals/harfbuzz/src"
 mkdir -p "${HEADERS_DIR}/CHarfBuzz/harfbuzz"
