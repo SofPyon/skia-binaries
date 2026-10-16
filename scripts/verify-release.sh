@@ -17,7 +17,7 @@ usage() {
 usage: verify-release.sh [--dist <dir>] [--tag <tag>]
 
   --dist <dir>  Directory of built release assets to verify (default: dist).
-  --tag <tag>   Download a published release's assets (~155MB) into a
+  --tag <tag>   Download a published release's assets (~195MB) into a
                 temporary directory, verify them, then delete the download.
                 Mutually exclusive with --dist.
 
@@ -116,7 +116,7 @@ if [ -n "${TAG}" ]; then
   CLEANUP_DIR="$(mktemp -d)"
   DIST_DIR="${CLEANUP_DIR}/assets"
   mkdir -p "${DIST_DIR}"
-  echo "== Downloading release assets for ${TAG} (~155MB) =="
+  echo "== Downloading release assets for ${TAG} (~195MB) =="
   gh release download "${TAG}" --repo "${REPO}" --dir "${DIST_DIR}" --clobber
 fi
 
@@ -141,6 +141,8 @@ echo "== Checking required assets =="
 REQUIRED_ASSETS=(
   libSkiaSharp.xcframework.zip
   libHarfBuzzSharp.xcframework.zip
+  libSkiaSharp-linux.artifactbundle.zip
+  libHarfBuzzSharp-linux.artifactbundle.zip
   skiasharp-linux-arm64.tar.gz
   skiasharp-linux-x64.tar.gz
   CHECKSUMS.txt
@@ -360,6 +362,157 @@ echo "== Verifying skiasharp-linux-arm64.tar.gz =="
 verify_linux_tarball "skiasharp-linux-arm64.tar.gz"
 echo "== Verifying skiasharp-linux-x64.tar.gz =="
 verify_linux_tarball "skiasharp-linux-x64.tar.gz"
+
+# --- 8-9. Linux artifact bundles ---------------------------------------------
+# Reads a static archive's ELF machine type: the e_machine field (offset 18) of the first
+# object file in it, which says what the archive was built for. Prints the architecture name,
+# or nothing when the file is not an archive of ELF objects.
+ELF_MACHINE_PY="$(mktemp)"
+cat >"${ELF_MACHINE_PY}" <<'ELFPY'
+import sys
+
+MACHINES = {0x3E: "x86_64", 0xB7: "aarch64"}
+with open(sys.argv[1], "rb") as f:
+    data = f.read()
+if not data.startswith(b"!<arch>\n"):
+    sys.exit(0)
+offset = data.find(b"\x7fELF")
+if offset < 0:
+    sys.exit(0)
+machine = int.from_bytes(data[offset + 18 : offset + 20], "little")
+print(MACHINES.get(machine, "unknown(0x%x)" % machine))
+ELFPY
+
+# Checks info.json's shape and prints one "<triple> <relative-archive-path>" line per triple.
+INFO_JSON_PY="$(mktemp)"
+cat >"${INFO_JSON_PY}" <<'INFOPY'
+import json
+import sys
+
+path, expected_identifier = sys.argv[1], sys.argv[2]
+data = json.load(open(path))
+artifacts = data["artifacts"]
+if len(artifacts) != 1:
+    sys.exit("expected exactly 1 artifact, found %d" % len(artifacts))
+((identifier, artifact),) = artifacts.items()
+if identifier != expected_identifier:
+    sys.exit("artifact identifier is %r, expected %r" % (identifier, expected_identifier))
+if artifact["type"] != "staticLibrary":
+    sys.exit("artifact type is %r, expected 'staticLibrary'" % artifact["type"])
+for variant in artifact["variants"]:
+    metadata = variant.get("staticLibraryMetadata", {})
+    if "moduleMapPath" in metadata:
+        sys.exit("variant %s names a moduleMapPath" % variant["path"])
+    if metadata.get("headerPaths") != ["Headers"]:
+        sys.exit(
+            "variant %s has headerPaths %r, expected ['Headers']"
+            % (variant["path"], metadata.get("headerPaths"))
+        )
+    for triple in variant["supportedTriples"]:
+        print("%s %s" % (triple, variant["path"]))
+INFOPY
+
+verify_linux_artifactbundle() {
+  local zip_name="$1" identifier="$2" header_check="$3"
+  local zip_path="${DIST_DIR}/${zip_name}"
+  if [ ! -f "${zip_path}" ]; then
+    fail "cannot verify ${zip_name}: file missing"
+    return
+  fi
+  local bundle_name="${zip_name%.zip}"
+  local extract_dir
+  extract_dir="$(mktemp -d)"
+  if ! unzip -q "${zip_path}" -d "${extract_dir}"; then
+    fail "${zip_name}: failed to unzip"
+    rm -rf "${extract_dir}"
+    return
+  fi
+  local bundle_dir="${extract_dir}/${bundle_name}"
+  if [ ! -d "${bundle_dir}" ]; then
+    fail "${zip_name}: ${bundle_name} not found after unzip"
+    rm -rf "${extract_dir}"
+    return
+  fi
+
+  # The same contract as the xcframeworks (see README.md): no module map in the bundle, and
+  # none named in info.json either, so the consuming package declares the module.
+  if find "${bundle_dir}" -name 'module.modulemap' | grep -q .; then
+    fail "${zip_name}: found a module.modulemap inside the bundle (must not ship one)"
+  else
+    pass "${zip_name}: no module.modulemap anywhere in the bundle"
+  fi
+
+  if [ ! -f "${bundle_dir}/info.json" ]; then
+    fail "${zip_name}: info.json missing"
+    rm -rf "${extract_dir}"
+    return
+  fi
+
+  local variants
+  if ! variants="$(python3 "${INFO_JSON_PY}" "${bundle_dir}/info.json" "${identifier}" 2>&1)"; then
+    fail "${zip_name}: info.json does not match the expected shape: ${variants}"
+    rm -rf "${extract_dir}"
+    return
+  fi
+  pass "${zip_name}: info.json declares one staticLibrary artifact '${identifier}' with no module map"
+
+  local seen_triples=()
+  while IFS=' ' read -r triple archive_path; do
+    [ -n "${triple}" ] || continue
+    seen_triples+=("${triple}")
+    local archive="${bundle_dir}/${archive_path}"
+    if [ ! -f "${archive}" ]; then
+      fail "${zip_name}: variant archive ${archive_path} missing"
+      continue
+    fi
+    local expected_arch="${triple%%-*}"
+    local actual_arch
+    actual_arch="$(python3 "${ELF_MACHINE_PY}" "${archive}")"
+    if [ "${actual_arch}" = "${expected_arch}" ]; then
+      pass "${zip_name} [${triple}]: ${archive_path} is ${actual_arch}"
+    else
+      fail "${zip_name} [${triple}]: ${archive_path} is '${actual_arch}', expected '${expected_arch}'"
+    fi
+  done <<<"${variants}"
+
+  local sorted_seen=""
+  if [ "${#seen_triples[@]}" -gt 0 ]; then
+    sorted_seen="$(printf '%s\n' "${seen_triples[@]}" | sort | tr '\n' ' ')"
+  fi
+  if [ "${sorted_seen}" = "aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu " ]; then
+    pass "${zip_name}: variants cover both Linux triples"
+  else
+    fail "${zip_name}: variants cover '${sorted_seen}', expected 'aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu '"
+  fi
+
+  if [ -f "${bundle_dir}/Headers/${header_check}" ]; then
+    pass "${zip_name}: header at Headers/${header_check}"
+  else
+    fail "${zip_name}: missing Headers/${header_check}"
+  fi
+
+  if [ -f "${bundle_dir}/BUILD-INFO.txt" ]; then
+    local recorded_commit
+    recorded_commit="$(awk -F= '/^MONO_SKIA_COMMIT=/ { print $2 }' "${bundle_dir}/BUILD-INFO.txt")"
+    if [ "${recorded_commit}" = "${MONO_SKIA_COMMIT}" ]; then
+      pass "${zip_name}: BUILD-INFO.txt MONO_SKIA_COMMIT matches skia.lock"
+    else
+      fail "${zip_name}: BUILD-INFO.txt MONO_SKIA_COMMIT is '${recorded_commit}', skia.lock has '${MONO_SKIA_COMMIT}'"
+    fi
+  else
+    fail "${zip_name}: BUILD-INFO.txt missing"
+  fi
+
+  rm -rf "${extract_dir}"
+}
+
+echo "== Verifying libSkiaSharp-linux.artifactbundle.zip =="
+verify_linux_artifactbundle "libSkiaSharp-linux.artifactbundle.zip" "libSkiaSharp" \
+  "include/c/sk_types.h"
+echo "== Verifying libHarfBuzzSharp-linux.artifactbundle.zip =="
+verify_linux_artifactbundle "libHarfBuzzSharp-linux.artifactbundle.zip" "libHarfBuzzSharp" \
+  "harfbuzz/hb.h"
+rm -f "${ELF_MACHINE_PY}" "${INFO_JSON_PY}"
 
 # --- summary -----------------------------------------------------------------
 echo
