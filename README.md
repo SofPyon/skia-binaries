@@ -2,7 +2,8 @@
 
 Prebuilt Skia (SkiaSharp C API) static libraries: xcframeworks for Apple
 platforms (iOS, iOS Simulator, visionOS, visionOS Simulator, macOS, Mac Catalyst)
-and pkg-config tarballs for Linux (arm64, x86_64).
+and, for Linux (arm64, x86_64), both SwiftPM artifact bundles and pkg-config
+tarballs.
 
 Binaries are published on the [Releases](../../releases) page, built from the
 [mono/skia](https://github.com/mono/skia) SkiaSharp fork pinned in
@@ -12,9 +13,15 @@ Binaries are published on the [Releases](../../releases) page, built from the
 
 - `libSkiaSharp.xcframework` — Skia + the SkiaSharp C API (`sk_*` symbols)
 - `libHarfBuzzSharp.xcframework` — HarfBuzz + the HarfBuzzSharp C API (`hb_*` symbols)
-- `skiasharp-linux-arm64.tar.gz` / `skiasharp-linux-x64.tar.gz` — both static archives, the
-  same headers, and `lib/pkgconfig/{SkiaSharp,HarfBuzzSharp}.pc` for Linux
+- `libSkiaSharp-linux.artifactbundle.zip` / `libHarfBuzzSharp-linux.artifactbundle.zip` — the
+  same two libraries for Linux as SwiftPM artifact bundles ([SE-0482][se0482] `staticLibrary`
+  artifacts, Swift 6.2 and later), one variant per architecture
+- `skiasharp-linux-arm64.tar.gz` / `skiasharp-linux-x64.tar.gz` — the same static archives and
+  headers again, with `lib/pkgconfig/{SkiaSharp,HarfBuzzSharp}.pc`, for build systems other
+  than SwiftPM
 - `CHECKSUMS.txt` — `swift package compute-checksum` output for each zip, for use in a Swift Package `binaryTarget`, and the SHA-256 of each tarball
+
+[se0482]: https://github.com/swiftlang/swift-evolution/blob/main/proposals/0482-swiftpm-static-library-binary-target-non-apple-platforms.md
 - `THIRD_PARTY_NOTICES.txt` / `LICENSES.zip` — license texts for Skia and its bundled third-party dependencies
 
 ## Build scripts
@@ -30,6 +37,7 @@ to their own location.
 | `scripts/docker-build-linux.sh <slice>` | Run `build-slice.sh` for a Linux slice inside the container from `docker/Dockerfile` (based on `swift:6.4-noble`, so the archives match the toolchain consumers build with). |
 | `scripts/make-xcframework.sh` | Assemble the Apple slices (lipo'd into one fat library per platform) and headers into xcframeworks, then zip them. Rewrites `CHECKSUMS.txt`. |
 | `scripts/make-linux-bundle.sh` | Package the Linux slices as pkg-config tarballs. Appends to `CHECKSUMS.txt`, so run it after `make-xcframework.sh`. |
+| `scripts/make-linux-artifactbundle.sh` | Repackage those tarballs as SwiftPM artifact bundles (one per library, both architectures as variants). Reads `dist/skiasharp-linux-*.tar.gz`, so run it after `make-linux-bundle.sh`; `--dist <dir>` works on a published release's downloaded tarballs too. |
 | `scripts/collect-licenses.sh` | Gather license texts of Skia and its third-party dependencies. |
 | `scripts/release.sh` | Publish the built zips and checksums as a GitHub release. Accepts `--draft`; refuses to run if `RELEASE_TAG` already has a release, or if `scripts/verify-release.sh` finds a problem with `dist/`. |
 | `scripts/check-lock.sh` | Validate `skia.lock`'s shape (sourceable, every variable but `HARFBUZZ_COMMIT` non-empty). Run standalone or from CI. |
@@ -56,6 +64,7 @@ for slice in iphoneos-arm64 iphonesimulator-arm64 iphonesimulator-x86_64 \
 done
 scripts/make-xcframework.sh
 scripts/make-linux-bundle.sh
+scripts/make-linux-artifactbundle.sh
 scripts/collect-licenses.sh
 scripts/release.sh --draft   # or scripts/release.sh to publish directly
 ```
@@ -133,16 +142,65 @@ Mac Catalyst.
 
 ### Linux
 
-SwiftPM has no binary targets on Linux. Unpack `skiasharp-linux-<arch>.tar.gz` anywhere,
-add its `lib/pkgconfig` to `PKG_CONFIG_PATH`, and declare the two modules as system
-libraries instead, reusing the same module map files:
+The same two static archives are published twice: as SwiftPM artifact bundles, and as
+pkg-config tarballs for everything else.
+
+#### SwiftPM (Swift 6.2 and later)
+
+[SE-0482][se0482] added `staticLibrary` artifacts to artifact bundles, which makes
+`.binaryTarget` work on Linux. Nothing has to be unpacked and `PKG_CONFIG_PATH` is not
+involved; the declaration looks like the Apple one:
+
+```swift
+.binaryTarget(name: "libSkiaSharp", url: "…/libSkiaSharp-linux.artifactbundle.zip", checksum: "…"),
+.binaryTarget(name: "libHarfBuzzSharp", url: "…/libHarfBuzzSharp-linux.artifactbundle.zip", checksum: "…"),
+.target(name: "CSkia", dependencies: ["libSkiaSharp"]),          // Sources/CSkia/include/{module.modulemap,CSkia.h} + an empty .c file
+.target(name: "CHarfBuzz", dependencies: ["libHarfBuzzSharp"]),  // Sources/CHarfBuzz/include/{module.modulemap,CHarfBuzz.h} + an empty .c file
+```
+
+Each bundle holds one `staticLibrary` artifact with two variants, `linux-arm64/lib*.a` for
+`aarch64-unknown-linux-gnu` and `linux-x64/lib*.a` for `x86_64-unknown-linux-gnu`, and one
+`Headers/` directory shared by both, which SwiftPM puts on the include path (the same layout as
+the xcframeworks: `Headers/include/c/*.h` for Skia, `Headers/harfbuzz/hb*.h` for HarfBuzz).
+
+The bundles name no `moduleMapPath`, for the same reason the xcframeworks carry no module map:
+the consuming package declares the module, which is also what lets it choose how much of the
+API its umbrella header exposes — HarfBuzz's subsetting API (`harfbuzz/hb-subset.h`) is in the
+archive, and `modulemap/CHarfBuzz/CHarfBuzz.h` here does not include it.
+
+SE-0482 covers artifacts that need nothing beyond the C standard library, and these need more
+than that, so the dependencies are not declared by the bundle: each target that uses them links
+them itself, as the proposal allows.
+
+```swift
+linkerSettings: [
+  .linkedLibrary(":libfontconfig.so.1", .when(platforms: [.linux])),
+  .linkedLibrary("stdc++", .when(platforms: [.linux])),
+  .linkedLibrary("m", .when(platforms: [.linux])),
+  .linkedLibrary("pthread", .when(platforms: [.linux])),
+  .linkedLibrary("dl", .when(platforms: [.linux])),
+]
+```
+
+These are the flags the `.pc` files below carry and the link smoke test in `build-slice.sh`
+uses. The fontconfig soname is named directly (`-l:libfontconfig.so.1`) because images such as
+`swift:*-noble` ship `libfontconfig1` but not the `-dev` package that provides the plain
+`libfontconfig.so` link.
+
+#### Other build systems
+
+Unpack `skiasharp-linux-<arch>.tar.gz` anywhere, add its `lib/pkgconfig` to `PKG_CONFIG_PATH`,
+and declare the two modules as system libraries, reusing the same module map files:
 
 ```swift
 .systemLibrary(name: "CSkia", path: "Sources/CSkia/include", pkgConfig: "SkiaSharp"),
 .systemLibrary(name: "CHarfBuzz", path: "Sources/CHarfBuzz/include", pkgConfig: "HarfBuzzSharp"),
 ```
 
-The `.pc` files carry the include path and link line (`-lSkiaSharp -l:libfontconfig.so.1 -lstdc++ …`; the fontconfig soname is named directly so the consuming image needs only `libfontconfig1`, not the -dev package).
+The `.pc` files carry the include path and the link line.
+
+#### Either way
+
 The archives are raster-only (no GL, Vulkan, Metal or Graphite) and use fontconfig as the
 default font manager, so the consuming image needs `libfontconfig1` and some fonts
 installed; the `swift:*-noble` images ship both. FreeType is compiled in.
