@@ -279,11 +279,11 @@ import sys
 
 root, skia, out_subdir, ninja = sys.argv[1:]
 sources = sorted((Path(root) / "capi/src").glob("*.cpp"))
-if not sources:
-    sys.exit(0)
 out = Path(skia) / out_subdir
 archive = out / "libskb_capi.a"
 archive.unlink(missing_ok=True)
+if not sources:
+    sys.exit(0)
 entries = json.loads(subprocess.check_output(
     [ninja, "-C", out_subdir, "-t", "compdb"], cwd=skia, text=True))
 reference = "../../src/c/sk_path.cpp"
@@ -462,13 +462,13 @@ cat >"${TMP_EXTRACT_DIR}/smoke.c" <<'SMOKE'
 #include "include/c/sk_paint.h"
 #include "include/c/sk_path.h"
 #include "include/c/sk_pathbuilder.h"
-#include "include/skb/skb_contourmeasure.h"
-#include <math.h>
-#include <stdio.h>
 #include "include/c/sk_surface.h"
 #include "include/c/sk_document.h"
 #include "include/c/sk_typeface.h"
+#include "include/skb/skb_contourmeasure.h"
 #include "hb.h"
+#include <math.h>
+#include <stdio.h>
 int main(void) {
   sk_imageinfo_t info = {0, 4, 4, RGBA_8888_SK_COLORTYPE, PREMUL_SK_ALPHATYPE};
   sk_surface_t* surface = sk_surface_new_raster(&info, 0, 0);
@@ -482,25 +482,21 @@ int main(void) {
   sk_pathbuilder_delete(builder);
   sk_pathmeasure_t* measure = sk_pathmeasure_new_with_path(path, false, 1);
   skb_contourmeasureiter_t* iter = skb_contourmeasureiter_new(path, false, 1);
-  float path_total = 0, contour_total = 0;
-  bool has_path_contour = true;
+  /* Both skip zero-length contours, so a positive length means the measure is on a contour. */
+  bool measure_on_contour = sk_pathmeasure_get_length(measure) > 0;
   int failed = 0;
   skb_contourmeasure_t* contour;
   while ((contour = skb_contourmeasureiter_next(iter)) != NULL) {
-    float length = skb_contourmeasure_get_length(contour);
-    if (!has_path_contour || fabsf(length - sk_pathmeasure_get_length(measure)) > 1e-4f) {
-      fprintf(stderr, "contour length mismatch\n");
+    if (!measure_on_contour ||
+        fabsf(skb_contourmeasure_get_length(contour) - sk_pathmeasure_get_length(measure)) > 1e-4f) {
+      fprintf(stderr, "skb_contourmeasure and sk_pathmeasure disagree on a contour\n");
       failed = 1;
     }
-    contour_total += length;
-    if (has_path_contour) {
-      path_total += sk_pathmeasure_get_length(measure);
-      has_path_contour = sk_pathmeasure_next_contour(measure);
-    }
+    measure_on_contour = measure_on_contour && sk_pathmeasure_next_contour(measure);
     skb_contourmeasure_unref(contour);
   }
-  if (has_path_contour || fabsf(path_total - contour_total) > 1e-4f) {
-    fprintf(stderr, "contour count or total length mismatch\n");
+  if (measure_on_contour) {
+    fprintf(stderr, "sk_pathmeasure found more contours than skb_contourmeasureiter\n");
     failed = 1;
   }
   skb_contourmeasureiter_delete(iter);
@@ -556,7 +552,13 @@ else
     -I "${SKIA_DIR}" -I "${ROOT_DIR}/capi" -I "${SKIA_DIR}/third_party/externals/harfbuzz/src" \
     "${TMP_EXTRACT_DIR}/smoke.c" "${SKIA_LIB}" "${HB_LIB}" -lc++ "${LINK_FRAMEWORKS[@]}" \
     -o "${TMP_EXTRACT_DIR}/smoke"
-  echo "link smoke test passed"
+  # A macOS slice for the host's own CPU can also run, which compares the measurements.
+  if [ "${SLICE}" = "macosx-$(uname -m)" ]; then
+    "${TMP_EXTRACT_DIR}/smoke"
+    echo "link and run smoke test passed"
+  else
+    echo "link smoke test passed"
+  fi
 fi
 
 echo "== Summary =="

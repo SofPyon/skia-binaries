@@ -64,9 +64,7 @@ bool skb_contourmeasure_get_pos_tan(const skb_contourmeasure_t* measure, float d
 bool skb_contourmeasure_get_matrix(const skb_contourmeasure_t* measure, float distance, sk_matrix_t* matrix, sk_pathmeasure_matrixflags_t flags) {
     SkMatrix skmatrix;
     bool result = AsContourMeasure(measure)->getMatrix(distance, &skmatrix, static_cast<SkContourMeasure::MatrixFlags>(flags));
-    if (result) {
-        *matrix = ToMatrix(&skmatrix);
-    }
+    *matrix = ToMatrix(&skmatrix);
     return result;
 }
 
