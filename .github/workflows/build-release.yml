@@ -137,7 +137,7 @@ jobs:
         if: runner.os == 'Linux'
         # Called explicitly rather than letting build-slice.sh re-exec it: build-slice.sh only
         # does that when the host isn't Linux, and building directly on this Linux runner would
-        # use its native glibc/libstdc++ instead of the swift:6.2-noble image's, which is what
+        # use its native glibc/libstdc++ instead of the swift:6.4-noble image's, which is what
         # SwiftPM consumers actually link against (see docker/Dockerfile).
         env:
           SLICE: ${{ matrix.slice }}
