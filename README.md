@@ -163,9 +163,11 @@ Each bundle holds one `staticLibrary` artifact with two variants, `linux-arm64/l
 `Headers/` directory shared by both, which SwiftPM puts on the include path (the same layout as
 the xcframeworks: `Headers/include/c/*.h` for Skia, `Headers/harfbuzz/hb*.h` for HarfBuzz).
 
-The bundles name no `moduleMapPath`, for the same reason the xcframeworks carry no module map:
-the consuming package declares the module, which is also what lets it choose how much of the
-API its umbrella header exposes — HarfBuzz's subsetting API (`harfbuzz/hb-subset.h`) is in the
+The bundles name no `moduleMapPath`, so the consuming package declares the module, as it does
+for the xcframeworks. A bundle could carry one — SwiftPM passes each bundle's `headerPaths` as
+`-I` into that bundle's own directory, so two bundles cannot collide the way two xcframeworks
+with a root module map would — but leaving it out is what lets a consumer choose how much of the
+API its umbrella header exposes. HarfBuzz's subsetting API (`harfbuzz/hb-subset.h`) is in the
 archive, and `modulemap/CHarfBuzz/CHarfBuzz.h` here does not include it.
 
 SE-0482 covers artifacts that need nothing beyond the C standard library, and these need more

@@ -79,6 +79,8 @@ skip() {
 
 CLEANUP_DIR=""
 PLIST_LOOKUP_PY=""
+ELF_MACHINE_PY=""
+INFO_JSON_PY=""
 # SC2317/SC2329 are the same finding under different shellcheck versions: this is only ever
 # called indirectly, via the `trap ... EXIT` below.
 # shellcheck disable=SC2317,SC2329
@@ -90,6 +92,12 @@ cleanup() {
   fi
   if [ -n "${PLIST_LOOKUP_PY}" ]; then
     rm -f "${PLIST_LOOKUP_PY}"
+  fi
+  if [ -n "${ELF_MACHINE_PY}" ]; then
+    rm -f "${ELF_MACHINE_PY}"
+  fi
+  if [ -n "${INFO_JSON_PY}" ]; then
+    rm -f "${INFO_JSON_PY}"
   fi
 }
 trap cleanup EXIT
@@ -512,7 +520,6 @@ verify_linux_artifactbundle "libSkiaSharp-linux.artifactbundle.zip" "libSkiaShar
 echo "== Verifying libHarfBuzzSharp-linux.artifactbundle.zip =="
 verify_linux_artifactbundle "libHarfBuzzSharp-linux.artifactbundle.zip" "libHarfBuzzSharp" \
   "harfbuzz/hb.h"
-rm -f "${ELF_MACHINE_PY}" "${INFO_JSON_PY}"
 
 # --- summary -----------------------------------------------------------------
 echo
