@@ -48,4 +48,7 @@
 #include "include/c/skresources_resource_provider.h"
 #include "include/c/sksg_invalidation_controller.h"
 
+/* This repository's wrappers for Skia APIs mono/skia's C API does not cover. */
+#include "include/skb/skb_contourmeasure.h"
+
 #endif /* CSKIA_H */
