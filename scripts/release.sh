@@ -69,7 +69,7 @@ pkg-config tarballs for Linux.
 - xcframework libraries: iphoneos (arm64), iphonesimulator (arm64, x86_64), xros (arm64),
   xrsimulator (arm64), macosx (arm64, x86_64), maccatalyst (arm64, x86_64)
 - Linux tarballs: skiasharp-linux-arm64.tar.gz, skiasharp-linux-x64.tar.gz (static archives
-  built on swift:6.2-noble, see docker/Dockerfile; fontconfig is linked from the system)
+  built on swift:6.4-noble, see docker/Dockerfile; fontconfig is linked from the system)
 - Minimum OS versions: iOS ${MIN_IOS}, macOS ${MIN_MACOS}, visionOS ${MIN_VISIONOS},
   Mac Catalyst ${MIN_MACCATALYST}
 

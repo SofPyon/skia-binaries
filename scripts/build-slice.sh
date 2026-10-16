@@ -99,7 +99,11 @@ COMMON_ARGS=(
   "skia_use_harfbuzz=false"
   "skia_use_icu=false"
   "skia_use_partition_alloc=false"
-  "skia_use_piex=true"
+  # RAW/DNG decoding is off in every SkiaSharp native build (its shared gn args pass both
+  # flags), and from milestone 153 mono/skia no longer fetches dng_sdk and piex at all: their
+  # DEPS entries are commented out, so a build with these on stops at the missing sources.
+  "skia_use_dng_sdk=false"
+  "skia_use_piex=false"
   "skia_use_system_expat=false"
   "skia_use_system_libjpeg_turbo=false"
   "skia_use_system_libpng=false"
@@ -112,8 +116,6 @@ COMMON_ARGS=(
 if [ "${LEAN}" = "1" ]; then
   COMMON_ARGS+=(
     "skia_use_gl=false"
-    "skia_use_piex=false"
-    "skia_use_dng_sdk=false"
   )
 fi
 

@@ -27,7 +27,7 @@ to their own location.
 | --- | --- |
 | `scripts/fetch.sh` | Clone the pinned Skia commit into `work/skia` and sync its dependencies (gn, ninja, third_party). |
 | `scripts/build-slice.sh <slice>` | Build `libSkiaSharp.a` and `libHarfBuzzSharp.a` for one slice with `gn`/`ninja`. A Linux slice run on macOS goes through `scripts/docker-build-linux.sh`. |
-| `scripts/docker-build-linux.sh <slice>` | Run `build-slice.sh` for a Linux slice inside the container from `docker/Dockerfile` (based on `swift:6.2-noble`, so the archives match the toolchain consumers build with). |
+| `scripts/docker-build-linux.sh <slice>` | Run `build-slice.sh` for a Linux slice inside the container from `docker/Dockerfile` (based on `swift:6.4-noble`, so the archives match the toolchain consumers build with). |
 | `scripts/make-xcframework.sh` | Assemble the Apple slices (lipo'd into one fat library per platform) and headers into xcframeworks, then zip them. Rewrites `CHECKSUMS.txt`. |
 | `scripts/make-linux-bundle.sh` | Package the Linux slices as pkg-config tarballs. Appends to `CHECKSUMS.txt`, so run it after `make-xcframework.sh`. |
 | `scripts/collect-licenses.sh` | Gather license texts of Skia and its third-party dependencies. |
