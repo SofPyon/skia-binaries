@@ -65,11 +65,9 @@ copy_license "expat" "${EXTERNALS_DIR}/expat"
 echo "== wuffs =="
 copy_license "wuffs" "${EXTERNALS_DIR}/wuffs"
 
-echo "== piex =="
-copy_license "piex" "${EXTERNALS_DIR}/piex"
-
-echo "== dng_sdk =="
-copy_license "dng_sdk" "${EXTERNALS_DIR}/dng_sdk"
+# piex and dng_sdk have no entry: RAW/DNG decoding is disabled in the gn args (see
+# scripts/build-slice.sh), and from milestone 153 mono/skia does not even fetch their sources,
+# so no code of theirs is in these archives to license.
 
 # FreeType is compiled in only for the Linux slices (the Apple slices rasterise glyphs through
 # Core Text). It is dual-licensed; the FTL is the one these binaries use.
